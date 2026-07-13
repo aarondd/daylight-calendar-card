@@ -179,6 +179,7 @@ const DEFAULT_STUB_CONFIG = {
   show_dashboard_nav_button: false,
   header_dashboard_path: null,
   header_weather_sensor: '',
+  color_source_entity: '',
   header_items: [],
   calendar_person_entities: {},
   default_hidden_calendars: [],
@@ -432,6 +433,7 @@ function createConfigNormalizationSchema({
       { key: 'header_dashboard_path', defaultValue: ({ rawConfig }) => normalizeDashboardPath(rawConfig.header_dashboard_path), normalize: ({ rawConfig }) => normalizeDashboardPath(rawConfig.header_dashboard_path) },
       { key: 'header_time_sensor', defaultValue: ({ derived }) => derived.normalizedHeaderTimeSensor, normalize: ({ derived }) => derived.normalizedHeaderTimeSensor },
       { key: 'header_weather_sensor', defaultValue: ({ derived }) => derived.normalizedHeaderWeatherSensor, normalize: ({ derived }) => derived.normalizedHeaderWeatherSensor },
+      { key: 'color_source_entity', defaultValue: ({ derived }) => derived.normalizedColorSourceEntity, normalize: ({ derived }) => derived.normalizedColorSourceEntity },
       { key: 'header_items', defaultValue: ({ derived }) => derived.normalizedHeaderItems, normalize: ({ derived }) => derived.normalizedHeaderItems },
       { key: 'hide_event_calendar_bubble', defaultValue: ({ rawConfig }) => rawConfig.hide_event_calendar_bubble || DEFAULT_CONFIG_VALUES.hide_event_calendar_bubble },
       { key: 'show_event_location', defaultValue: ({ rawConfig }) => rawConfig.show_event_location || DEFAULT_CONFIG_VALUES.show_event_location },
@@ -2376,6 +2378,12 @@ class SkylightCalendarCardEditor extends HTMLElement {
           <input id="header_weather_sensor" data-field="header_weather_sensor" type="text" value="${this._config.header_weather_sensor || ''}" placeholder="weather.home">
         </div>
       </div>
+      <div class="field-row">
+        <div class="field field-inline">
+          <label for="color_source_entity">Event color source entity</label>
+          <input id="color_source_entity" data-field="color_source_entity" type="text" value="${this._config.color_source_entity || ''}" placeholder="sensor.google_calendar_event_colors">
+        </div>
+      </div>
       <div class="field field-inline">
         <label for="preference_storage_key">Preference storage key</label>
         <input id="preference_storage_key" data-field="preference_storage_key" type="text" value="${this._config.preference_storage_key || ''}" placeholder="Optional custom key">
@@ -2902,7 +2910,7 @@ class SkylightCalendarCardEditor extends HTMLElement {
       checkbox.checked = this.getListFieldValue(listField).includes(checkbox.value);
     });
 
-    this.querySelectorAll('input[data-type="number"], input[data-type="nullable-number"], input[data-type="list"], input[data-field="language"], input[data-field="locale"], input[data-field="header_time_sensor"], input[data-field="header_weather_sensor"], input[data-field="preference_storage_key"], input[data-field="background_image_url"], input[data-field="background_image_size"], input[data-field="background_image_position"], input[data-field="background_image_repeat"]').forEach((input) => {
+    this.querySelectorAll('input[data-type="number"], input[data-type="nullable-number"], input[data-type="list"], input[data-field="language"], input[data-field="locale"], input[data-field="header_time_sensor"], input[data-field="header_weather_sensor"], input[data-field="color_source_entity"], input[data-field="preference_storage_key"], input[data-field="background_image_url"], input[data-field="background_image_size"], input[data-field="background_image_position"], input[data-field="background_image_repeat"]').forEach((input) => {
       if (document.activeElement === input) return;
       const field = input.dataset.field;
       const type = input.dataset.type;
@@ -11415,6 +11423,9 @@ class SkylightCalendarCard extends HTMLElement {
       normalizedHeaderWeatherSensor: typeof rawConfig.header_weather_sensor === 'string' && rawConfig.header_weather_sensor.trim()
         ? rawConfig.header_weather_sensor.trim()
         : null,
+      normalizedColorSourceEntity: typeof rawConfig.color_source_entity === 'string' && rawConfig.color_source_entity.trim()
+        ? rawConfig.color_source_entity.trim()
+        : null,
       normalizedHeaderItems: normalizeHeaderItems(rawConfig.header_items),
       language
     };
@@ -15402,8 +15413,27 @@ class SkylightCalendarCard extends HTMLElement {
     });
   }
 
+  getGoogleSourceEventColor(event) {
+    const sourceEntityId = this._config?.color_source_entity;
+    if (!sourceEntityId || !event) return null;
+    const sourceState = this._hass?.states?.[sourceEntityId];
+    const attributes = sourceState?.attributes;
+    if (!attributes) return null;
+    const byRecurrenceId = attributes.by_recurrence_id || {};
+    const byUid = attributes.by_uid || {};
+    const recurrenceId = event.recurrence_id;
+    const uid = event.uid || event.ical_uid || event.iCalUID;
+    const rawColor = (recurrenceId && byRecurrenceId[recurrenceId]) || (uid && byUid[uid]) || null;
+    return rawColor ? this.normalizeSingleColor(rawColor) : null;
+  }
+
   getEffectiveEventColor(event, styleCandidates = null, { virtualColor = null } = {}) {
-    return this.getCustomEventColor(event) || styleCandidates?.background_color?.value || virtualColor || event?.color || null;
+    return this.getCustomEventColor(event)
+      || styleCandidates?.background_color?.value
+      || this.getGoogleSourceEventColor(event)
+      || virtualColor
+      || event?.color
+      || null;
   }
 
   getEventAccentColor(event) {

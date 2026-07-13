@@ -954,6 +954,9 @@ class SkylightCalendarCard extends HTMLElement {
       normalizedHeaderWeatherSensor: typeof rawConfig.header_weather_sensor === 'string' && rawConfig.header_weather_sensor.trim()
         ? rawConfig.header_weather_sensor.trim()
         : null,
+      normalizedColorSourceEntity: typeof rawConfig.color_source_entity === 'string' && rawConfig.color_source_entity.trim()
+        ? rawConfig.color_source_entity.trim()
+        : null,
       normalizedHeaderItems: normalizeHeaderItemsHelper(rawConfig.header_items),
       language
     };
@@ -4941,8 +4944,27 @@ class SkylightCalendarCard extends HTMLElement {
     });
   }
 
+  getGoogleSourceEventColor(event) {
+    const sourceEntityId = this._config?.color_source_entity;
+    if (!sourceEntityId || !event) return null;
+    const sourceState = this._hass?.states?.[sourceEntityId];
+    const attributes = sourceState?.attributes;
+    if (!attributes) return null;
+    const byRecurrenceId = attributes.by_recurrence_id || {};
+    const byUid = attributes.by_uid || {};
+    const recurrenceId = event.recurrence_id;
+    const uid = event.uid || event.ical_uid || event.iCalUID;
+    const rawColor = (recurrenceId && byRecurrenceId[recurrenceId]) || (uid && byUid[uid]) || null;
+    return rawColor ? this.normalizeSingleColor(rawColor) : null;
+  }
+
   getEffectiveEventColor(event, styleCandidates = null, { virtualColor = null } = {}) {
-    return this.getCustomEventColor(event) || styleCandidates?.background_color?.value || virtualColor || event?.color || null;
+    return this.getCustomEventColor(event)
+      || styleCandidates?.background_color?.value
+      || this.getGoogleSourceEventColor(event)
+      || virtualColor
+      || event?.color
+      || null;
   }
 
   getEventAccentColor(event) {

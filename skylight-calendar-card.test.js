@@ -118,6 +118,7 @@ const CONFIG_COVERAGE_INVENTORY = {
   header_dashboard_path: 'setConfig schema keeps normalized fields from being overwritten by raw config',
   header_time_sensor: 'setConfig schema keeps normalized fields from being overwritten by raw config',
   header_weather_sensor: 'weather renders Home Assistant mdi icons instead of emoji glyphs',
+  color_source_entity: 'color_source_entity supplies google-sourced event colors keyed by recurrence_id then uid',
   header_items: 'header_items normalize supported item shapes and formats',
   hide_event_calendar_bubble: 'setConfig applies visual layout and styling options',
   show_event_location: 'setConfig applies visual layout and styling options',
@@ -810,7 +811,7 @@ test('getStubConfig and normalized defaults include key configuration defaults',
     'combine_background', 'hide_calendars', 'hide_header', 'hide_year', 'hide_controls',
     'hide_navigation_buttons', 'hide_add_event_button', 'hide_view_selector',
     'hide_dark_mode_toggle', 'show_dashboard_nav_button', 'header_dashboard_path',
-    'header_weather_sensor', 'header_items', 'calendar_person_entities', 'default_hidden_calendars', 'color_scheme', 'enable_event_management', 'event_modal_size'
+    'header_weather_sensor', 'color_source_entity', 'header_items', 'calendar_person_entities', 'default_hidden_calendars', 'color_scheme', 'enable_event_management', 'event_modal_size'
   ];
   for (const key of requiredStubKeys) assert.ok(key in stub, `${key} should exist in getStubConfig()`);
   assert.deepEqual(stub, {
@@ -862,6 +863,7 @@ test('getStubConfig and normalized defaults include key configuration defaults',
     show_dashboard_nav_button: false,
     header_dashboard_path: null,
     header_weather_sensor: '',
+    color_source_entity: '',
     header_items: [],
     calendar_person_entities: {},
     default_hidden_calendars: [],
@@ -5756,6 +5758,63 @@ test('calendar colors prefer configured values before default palette', () => {
 
   assert.equal(card.getCalendarColor('calendar.family', 0), '#112233');
   assert.equal(card.getCalendarColor('calendar.work', 1), '#4ECDC4');
+});
+
+test('color_source_entity supplies google-sourced event colors keyed by recurrence_id then uid', () => {
+  const card = makeCard({
+    entities: ['calendar.family'],
+    colors: { 'calendar.family': '#112233' },
+    color_source_entity: 'sensor.google_calendar_event_colors'
+  });
+  card._hass = {
+    states: {
+      'sensor.google_calendar_event_colors': {
+        attributes: {
+          by_uid: { 'uid-1': '#ff0000' },
+          by_recurrence_id: { 'occ-1': '#00ff00' }
+        }
+      }
+    }
+  };
+
+  const seriesEvent = { entityId: 'calendar.family', uid: 'uid-1', color: '#112233' };
+  assert.equal(card.getGoogleSourceEventColor(seriesEvent), '#ff0000');
+  assert.equal(card.getEffectiveEventColor(seriesEvent), '#ff0000');
+
+  const occurrenceEvent = { entityId: 'calendar.family', uid: 'uid-1', recurrence_id: 'occ-1', color: '#112233' };
+  assert.equal(card.getGoogleSourceEventColor(occurrenceEvent), '#00ff00');
+
+  const unrelatedEvent = { entityId: 'calendar.family', uid: 'uid-missing', color: '#112233' };
+  assert.equal(card.getGoogleSourceEventColor(unrelatedEvent), null);
+  assert.equal(card.getEffectiveEventColor(unrelatedEvent), '#112233');
+});
+
+test('color_source_entity yields to manual custom colors and event_styles overrides', () => {
+  const card = makeCard({
+    entities: ['calendar.family'],
+    color_source_entity: 'sensor.google_calendar_event_colors'
+  });
+  card._hass = {
+    states: {
+      'sensor.google_calendar_event_colors': {
+        attributes: { by_uid: { 'uid-1': '#ff0000' } }
+      }
+    }
+  };
+  const event = { entityId: 'calendar.family', uid: 'uid-1', color: '#3B82F6' };
+
+  assert.equal(
+    card.getEffectiveEventColor(event, { background_color: { value: '#abcdef' } }),
+    '#abcdef'
+  );
+
+  card._customEventColors = {
+    version: 1,
+    occurrences: { 'calendar.family|uid|uid-1': '#123456' },
+    series: {},
+    future: {}
+  };
+  assert.equal(card.getEffectiveEventColor(event), '#123456');
 });
 
 test('editor color swatches show effective calendar and event font colors', () => {

@@ -146,6 +146,7 @@ export const DEFAULT_STUB_CONFIG = {
   show_dashboard_nav_button: false,
   header_dashboard_path: null,
   header_weather_sensor: '',
+  color_source_entity: '',
   header_items: [],
   calendar_person_entities: {},
   default_hidden_calendars: [],
