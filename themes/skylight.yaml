@@ -1,0 +1,50 @@
+Skylight:
+  primary-color: "#F2A6B8"
+  accent-color: "#8FC7E0"
+  dark-primary-color: "#D98CA0"
+  light-primary-color: "#FBDCE3"
+
+  primary-background-color: "#FDF9F3"
+  secondary-background-color: "#FFFFFF"
+  card-background-color: "#FFFFFF"
+
+  primary-text-color: "#4A4238"
+  secondary-text-color: "#7A6F63"
+  text-primary-color: "#4A4238"
+  disabled-text-color: "#B7AEA3"
+  divider-color: "#EFE6DA"
+
+  # Font: Aleo (loaded as a Lovelace CSS resource pointing at Google Fonts).
+  # Modern HA frontend reads --ha-font-family-*, not the legacy Polymer
+  # paper-font-*_-_font-family variables, so both are set here for safety.
+  primary-font-family: "Aleo, Georgia, serif"
+  ha-font-family-body: "var(--primary-font-family)"
+  ha-font-family-heading: "var(--primary-font-family)"
+  ha-font-family-longform: "var(--primary-font-family)"
+  mdc-typography-font-family: "var(--primary-font-family)"
+  paper-font-common-base_-_font-family: "var(--primary-font-family)"
+  paper-font-common-code_-_font-family: "var(--primary-font-family)"
+  paper-font-body1_-_font-family: "var(--primary-font-family)"
+  paper-font-subhead_-_font-family: "var(--primary-font-family)"
+  paper-font-headline_-_font-family: "var(--primary-font-family)"
+  paper-font-caption_-_font-family: "var(--primary-font-family)"
+  paper-font-title_-_font-family: "var(--primary-font-family)"
+
+  ha-card-border-radius: "20px"
+  ha-card-box-shadow: "0 2px 10px rgba(0,0,0,0.06)"
+  ha-card-border-width: "0px"
+
+  app-header-background-color: "#FBDCE3"
+  app-header-text-color: "#4A4238"
+  sidebar-background-color: "#FFFFFF"
+  sidebar-text-color: "#4A4238"
+  sidebar-selected-background-color: "#FBDCE3"
+  sidebar-selected-text-color: "#4A4238"
+  sidebar-icon-color: "#B79AA6"
+
+  skylight-pink: "#F6C6D9"
+  skylight-blue: "#BFE1F0"
+  skylight-mint: "#C9E8D5"
+  skylight-lavender: "#D9CDEF"
+  skylight-peach: "#FBDCC2"
+  skylight-yellow: "#F7E7A6"
