@@ -23,6 +23,7 @@ export function createConfigNormalizationSchema({
   normalizeBackgroundOpacity,
   normalizeEventModalSize,
   normalizeVirtualCalendars,
+  normalizePeople,
   normalizeDefaultDarkMode,
   getDefaultTitle
 }) {
@@ -74,6 +75,7 @@ export function createConfigNormalizationSchema({
       { key: 'header_time_sensor', defaultValue: ({ derived }) => derived.normalizedHeaderTimeSensor, normalize: ({ derived }) => derived.normalizedHeaderTimeSensor },
       { key: 'header_weather_sensor', defaultValue: ({ derived }) => derived.normalizedHeaderWeatherSensor, normalize: ({ derived }) => derived.normalizedHeaderWeatherSensor },
       { key: 'color_source_entity', defaultValue: ({ derived }) => derived.normalizedColorSourceEntity, normalize: ({ derived }) => derived.normalizedColorSourceEntity },
+      { key: 'google_color_write_back', defaultValue: ({ rawConfig }) => rawConfig.google_color_write_back === true, normalize: ({ rawConfig }) => rawConfig.google_color_write_back === true },
       { key: 'header_items', defaultValue: ({ derived }) => derived.normalizedHeaderItems, normalize: ({ derived }) => derived.normalizedHeaderItems },
       { key: 'hide_event_calendar_bubble', defaultValue: ({ rawConfig }) => rawConfig.hide_event_calendar_bubble || DEFAULT_CONFIG_VALUES.hide_event_calendar_bubble },
       { key: 'show_event_location', defaultValue: ({ rawConfig }) => rawConfig.show_event_location || DEFAULT_CONFIG_VALUES.show_event_location },
@@ -115,6 +117,7 @@ export function createConfigNormalizationSchema({
       { key: 'hide_badge_calendars', defaultValue: ({ rawConfig }) => rawConfig.hide_badge_calendars || [...DEFAULT_CONFIG_VALUES.hide_badge_calendars] },
       { key: 'default_hidden_calendars', defaultValue: ({ derived }) => derived.normalizedDefaultHiddenCalendars, normalize: ({ derived }) => derived.normalizedDefaultHiddenCalendars },
       { key: 'virtual_calendars', defaultValue: ({ rawConfig }) => normalizeVirtualCalendars(rawConfig.virtual_calendars || [...DEFAULT_CONFIG_VALUES.virtual_calendars]) },
+      { key: 'people', defaultValue: ({ rawConfig }) => normalizePeople(rawConfig.people || [...DEFAULT_CONFIG_VALUES.people]) },
       { key: 'language', defaultValue: ({ rawConfig }) => rawConfig.language || DEFAULT_CONFIG_VALUES.language },
       { key: 'locale', defaultValue: ({ rawConfig }) => rawConfig.locale || DEFAULT_CONFIG_VALUES.locale },
       { key: 'color_scheme', defaultValue: ({ rawConfig }) => normalizeDefaultDarkMode(rawConfig.color_scheme), normalize: ({ rawConfig }) => normalizeDefaultDarkMode(rawConfig.color_scheme) },

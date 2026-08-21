@@ -92,6 +92,7 @@ export const DEFAULT_CONFIG_VALUES = {
   readonly_calendars: [],
   hide_badge_calendars: [],
   virtual_calendars: [],
+  people: [],
   language: null,
   locale: null,
   preference_storage_key: null

@@ -119,6 +119,7 @@ const CONFIG_COVERAGE_INVENTORY = {
   header_time_sensor: 'setConfig schema keeps normalized fields from being overwritten by raw config',
   header_weather_sensor: 'weather renders Home Assistant mdi icons instead of emoji glyphs',
   color_source_entity: 'color_source_entity supplies google-sourced event colors keyed by recurrence_id then uid',
+  google_color_write_back: 'pushExplicitColorToGoogle calls set_event_color only when write-back is enabled and an explicit color resolves',
   header_items: 'header_items normalize supported item shapes and formats',
   hide_event_calendar_bubble: 'setConfig applies visual layout and styling options',
   show_event_location: 'setConfig applies visual layout and styling options',
@@ -160,6 +161,7 @@ const CONFIG_COVERAGE_INVENTORY = {
   hide_badge_calendars: 'calendar badges respect hidden badge calendars',
   default_hidden_calendars: 'default_hidden_calendars initializes hidden calendar badges',
   virtual_calendars: 'setConfig applies visual layout and styling options',
+  people: 'person tag color wins over color_source_entity, virtual color, and static calendar color',
   language: 'Danish language support localizes core labels and locale',
   locale: 'Danish language support localizes core labels and locale',
   color_scheme: 'setConfig normalizes fallback values and aliases',
@@ -669,6 +671,77 @@ test('successful create workflow completion still closes the modal', async () =>
   assert.equal(modalClassList.contains('show'), false);
 });
 
+test('when updateEvent falls back to create+delete, color push targets the newly created event, not the deleted original', async () => {
+  const { handlers, card } = createEventFormHarness({ mode: 'edit' });
+  card._config.google_color_write_back = true;
+  card._config.color_source_entity = 'sensor.google_calendar_event_colors';
+  card._config.people = [{ tag: 'soraya', color: '#e91e63', name: 'Soraya' }];
+
+  // Same content (title/time) as the original event ("evt-1", set up by
+  // createEventFormHarness), simulating an edit that only changed the description/person -
+  // both would satisfy the same content match key.
+  const recreatedEvent = {
+    entityId: 'calendar.family',
+    uid: 'evt-2-new',
+    summary: 'Practice',
+    start: { dateTime: '2026-05-01T09:00:00.000Z' },
+    end: { dateTime: '2026-05-01T10:00:00.000Z' }
+  };
+  // A stale re-read of the deleted original, still present in this refetch because the
+  // delete hasn't propagated yet - must never be mistaken for the recreated event.
+  const staleOriginal = { entityId: 'calendar.family', uid: 'evt-1', summary: 'Practice' };
+
+  card.updateEvent = async () => ({ recreated: true, matchKey: 'match-key-x', calendarId: 'calendar.family' });
+  card.getEventExactMatchKey = () => 'match-key-x';
+  card.updateEvents = async () => { card._events = [staleOriginal, recreatedEvent]; };
+  const pushCalls = [];
+  card.pushExplicitColorToGoogle = async (event) => { pushCalls.push(event); };
+
+  await handlers.submit({ preventDefault: () => {} });
+
+  assert.equal(pushCalls.length, 1);
+  assert.equal(pushCalls[0].uid, 'evt-2-new');
+});
+
+test('when the recreated event is not yet visible in a refresh, color push is skipped rather than targeting the stale original', async () => {
+  const { handlers, card } = createEventFormHarness({ mode: 'edit' });
+  card._config.google_color_write_back = true;
+  card._config.color_source_entity = 'sensor.google_calendar_event_colors';
+  card._config.people = [{ tag: 'soraya', color: '#e91e63', name: 'Soraya' }];
+
+  const staleOriginal = { entityId: 'calendar.family', uid: 'evt-1', summary: 'Practice' };
+
+  card.updateEvent = async () => ({ recreated: true, matchKey: 'match-key-x', calendarId: 'calendar.family' });
+  card.getEventExactMatchKey = () => 'match-key-x';
+  card.updateEvents = async () => { card._events = [staleOriginal]; }; // recreated event not visible yet
+  const pushCalls = [];
+  card.pushExplicitColorToGoogle = async (event) => { pushCalls.push(event); };
+
+  await handlers.submit({ preventDefault: () => {} });
+
+  assert.equal(pushCalls.length, 0);
+});
+
+test('when updateEvent updates in place, color push targets the original event unchanged', async () => {
+  const { handlers, card } = createEventFormHarness({ mode: 'edit' });
+  card._config.google_color_write_back = true;
+  card._config.color_source_entity = 'sensor.google_calendar_event_colors';
+
+  card.updateEvent = async () => ({ recreated: false });
+  const updateEventsCalls = [];
+  card.updateEvents = async () => { updateEventsCalls.push(1); };
+  const pushCalls = [];
+  card.pushExplicitColorToGoogle = async (event) => { pushCalls.push(event); };
+
+  await handlers.submit({ preventDefault: () => {} });
+
+  assert.equal(pushCalls.length, 1);
+  assert.equal(pushCalls[0].uid, 'evt-1');
+  // updateEvents is still called once, by the normal post-save refresh - not an extra
+  // time for a recreate-match lookup that wasn't needed.
+  assert.equal(updateEventsCalls.length, 1);
+});
+
 
 test('event detail modal exposes Color action for read-only events and badge uses effective custom color', async () => {
   const { applyCustomEventColor } = await import('./src/events/custom-event-colors.js');
@@ -778,10 +851,11 @@ test('editor schema metadata preserves config key order and editor defaults', ()
     'rolling_days_week_compact',
     'rolling_days_schedule'
   ]);
-  assert.deepEqual(schemaKeys.slice(-7), [
+  assert.deepEqual(schemaKeys.slice(-8), [
     'hide_badge_calendars',
     'default_hidden_calendars',
     'virtual_calendars',
+    'people',
     'language',
     'locale',
     'color_scheme',
@@ -5401,6 +5475,67 @@ test('shared daylight color picker initializes and synchronizes color state', as
   assert.ok(emitted.some((event) => event.type === 'color-change'));
 });
 
+test('color picker preset groups surface in-use, recent, and Google Calendar colors', async () => {
+  const { DaylightColorPicker, GOOGLE_CALENDAR_EVENT_COLORS, getRecentPickerColors, recordRecentPickerColor } = await import('./src/components/daylight-color-picker.js');
+
+  const store = new Map();
+  const originalLocalStorage = window.localStorage;
+  window.localStorage = {
+    getItem: (key) => store.get(key) ?? null,
+    setItem: (key, value) => store.set(key, value)
+  };
+
+  try {
+    assert.deepEqual(getRecentPickerColors(), []);
+    recordRecentPickerColor('#ff0000');
+    recordRecentPickerColor('#00ff00');
+    recordRecentPickerColor('#ff0000');
+    assert.deepEqual(getRecentPickerColors(), ['#ff0000', '#00ff00']);
+
+    const picker = new DaylightColorPicker();
+    picker.inUseColors = ['#3f51b5', '#3f51b5', 'not-a-color', '#00ff00'];
+    assert.deepEqual(picker.inUseColors, ['#3f51b5', '#00ff00']);
+
+    const groups = picker.getPresetGroups();
+    const groupLabels = groups.map((group) => group.label);
+    assert.deepEqual(groupLabels, ['In use', 'Recent', 'Google Calendar']);
+
+    const inUseGroup = groups.find((group) => group.label === 'In use');
+    assert.deepEqual(inUseGroup.colors.map((c) => c.hex), ['#3f51b5', '#00ff00']);
+
+    const recentGroup = groups.find((group) => group.label === 'Recent');
+    assert.deepEqual(recentGroup.colors.map((c) => c.hex), ['#ff0000']);
+
+    const googleGroup = groups.find((group) => group.label === 'Google Calendar');
+    assert.deepEqual(googleGroup.colors, GOOGLE_CALENDAR_EVENT_COLORS);
+
+    picker.inUseColors = [];
+    const emptyRecentPicker = new DaylightColorPicker();
+    window.localStorage.setItem('daylight-calendar-card-recent-colors', '[]');
+    assert.deepEqual(emptyRecentPicker.getPresetGroups().map((g) => g.label), ['Google Calendar']);
+  } finally {
+    window.localStorage = originalLocalStorage;
+  }
+});
+
+test('editor gathers in-use colors from calendars, people, virtual calendars, and header fields', () => {
+  const Editor = customElements.get('daylight-calendar-card-editor');
+  const editor = new Editor();
+  editor._config = {
+    entities: ['calendar.family'],
+    colors: { 'calendar.family': '#3f51b5' },
+    event_font_colors: { 'calendar.family': '#112233' },
+    people: [{ tag: 'soraya', color: '#e91e63', name: 'Soraya' }],
+    virtual_calendars: [{ id: 'home', name: 'Home', color: '#009688', entities: ['calendar.family'] }],
+    header_color: '#ffffff',
+    header_text_color: null,
+    event_neutral_background: '#f8f3e9'
+  };
+
+  const inUseColors = editor.getInUseColorsForPicker();
+  assert.deepEqual(new Set(inUseColors), new Set(['#3F51B5', '#112233', '#E91E63', '#009688', '#FFFFFF', '#F8F3E9']));
+});
+
 test('hidden single events do not expose custom or event-style colors', async () => {
   const { applyCustomEventColor } = await import('./src/events/custom-event-colors.js');
   const customCard = makeCard({ entities: ['calendar.a'] });
@@ -5705,17 +5840,83 @@ for (const calendarType of [
 
       await card.updateEvent(originalEvent, calendarType.id, eventData, 'future');
 
+      // WebSocket is tried first for every in-place update, recurring or not - matching
+      // deleteEvent()'s existing behavior - since some Home Assistant versions/integrations
+      // don't register calendar.update_event as a domain service at all.
+      assert.equal(sent.length, 1);
+      assert.equal(sent[0].type, 'calendar/event/update');
+      assert.equal(sent[0].entity_id, calendarType.id);
+      assert.equal(calls.length, 0);
       if (recurrence.rrule) {
-        assert.equal(sent.length, 1);
-        assert.equal(sent[0].type, 'calendar/event/update');
-        assert.equal(sent[0].entity_id, calendarType.id);
         assert.equal(sent[0].event.rrule, recurrence.rrule);
         assert.equal(sent[0].recurrence_range, 'THISANDFUTURE');
       } else {
-        assert.equal(calls.length, 1);
-        assert.equal(calls[0][1], 'update_event');
-        assert.equal(calls[0][2].entity_id, calendarType.id);
+        assert.equal(sent[0].recurrence_range, undefined);
       }
+    });
+
+    test(`updateEvent ${calendarType.integration} - ${recurrence.name} - falls back to service when WebSocket unavailable`, async () => {
+      const card = makeCard();
+      const calls = [];
+      card._calendarCapabilities[calendarType.id] = { canUpdate: true };
+      card._hass = {
+        services: { calendar: { update_event: {} } },
+        callService: async (...args) => calls.push(args)
+      };
+
+      const originalEvent = {
+        entityId: calendarType.id,
+        uid: 'uid-1',
+        recurrence_id: '20260501T100000Z',
+        ...(recurrence.rrule ? { rrule: recurrence.rrule } : {})
+      };
+      const eventData = {
+        summary: 'Updated',
+        start: recurrence.rrule ? { dateTime: '2026-05-01T12:00:00Z' } : { date: '2026-05-01' },
+        end: recurrence.rrule ? { dateTime: '2026-05-01T13:00:00Z' } : { date: '2026-05-02' },
+        ...(recurrence.rrule ? { rrule: recurrence.rrule } : {})
+      };
+
+      await card.updateEvent(originalEvent, calendarType.id, eventData, 'future');
+
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0][1], 'update_event');
+      assert.equal(calls[0][2].entity_id, calendarType.id);
+    });
+
+    test(`updateEvent ${calendarType.integration} - ${recurrence.name} - uses WebSocket instead of destructive create+delete when update_event service is unregistered`, async () => {
+      const card = makeCard();
+      const sent = [];
+      const createCalls = [];
+      const deleteCalls = [];
+      card._calendarCapabilities[calendarType.id] = { canUpdate: true };
+      card._hass = {
+        connection: { sendMessagePromise: async (payload) => sent.push(payload) },
+        services: { calendar: { create_event: {}, get_events: {} } }, // no update_event, matching real HA installs
+        callService: async () => {}
+      };
+      card.createEvent = async (...args) => createCalls.push(args);
+      card.deleteEvent = async (...args) => deleteCalls.push(args);
+
+      const originalEvent = {
+        entityId: calendarType.id,
+        uid: 'uid-1',
+        recurrence_id: '20260501T100000Z',
+        ...(recurrence.rrule ? { rrule: recurrence.rrule } : {})
+      };
+      const eventData = {
+        summary: 'Updated',
+        start: recurrence.rrule ? { dateTime: '2026-05-01T12:00:00Z' } : { date: '2026-05-01' },
+        end: recurrence.rrule ? { dateTime: '2026-05-01T13:00:00Z' } : { date: '2026-05-02' }
+      };
+
+      await card.updateEvent(originalEvent, calendarType.id, eventData, 'future');
+
+      assert.equal(sent.length, 1);
+      assert.equal(sent[0].type, 'calendar/event/update');
+      assert.equal(sent[0].uid, 'uid-1');
+      assert.equal(createCalls.length, 0);
+      assert.equal(deleteCalls.length, 0);
     });
 
     test(`deleteEvent ${calendarType.integration} - ${recurrence.name}`, async () => {
@@ -5815,6 +6016,275 @@ test('color_source_entity yields to manual custom colors and event_styles overri
     future: {}
   };
   assert.equal(card.getEffectiveEventColor(event), '#123456');
+});
+
+test('person tag color wins over color_source_entity, virtual color, and static calendar color', () => {
+  const card = makeCard({
+    entities: ['calendar.family'],
+    colors: { 'calendar.family': '#112233' },
+    color_source_entity: 'sensor.google_calendar_event_colors',
+    people: [{ tag: 'soraya', color: '#e91e63', name: 'Soraya' }]
+  });
+  card._hass = {
+    states: {
+      'sensor.google_calendar_event_colors': {
+        attributes: { by_uid: { 'uid-1': '#ff0000' } }
+      }
+    }
+  };
+
+  const event = { entityId: 'calendar.family', uid: 'uid-1', color: '#112233', summary: 'Pickup #soraya' };
+  assert.equal(card.getPersonTagColor(event), '#e91e63');
+  assert.equal(card.getEffectiveEventColor(event), '#e91e63');
+
+  const untaggedEvent = { entityId: 'calendar.family', uid: 'uid-1', color: '#112233', summary: 'Pickup' };
+  assert.equal(card.getEffectiveEventColor(untaggedEvent), '#ff0000');
+});
+
+test('manual custom colors and event_styles rules still win over a person tag', () => {
+  const card = makeCard({
+    entities: ['calendar.family'],
+    people: [{ tag: 'soraya', color: '#e91e63', name: 'Soraya' }]
+  });
+  const event = { entityId: 'calendar.family', uid: 'uid-1', color: '#3B82F6', summary: 'Pickup #soraya' };
+
+  assert.equal(
+    card.getEffectiveEventColor(event, { background_color: { value: '#abcdef' } }),
+    '#abcdef'
+  );
+
+  card._customEventColors = {
+    version: 1,
+    occurrences: { 'calendar.family|uid|uid-1': '#123456' },
+    series: {},
+    future: {}
+  };
+  assert.equal(card.getEffectiveEventColor(event), '#123456');
+});
+
+test('person tag color makes hasExplicitBackgroundColor true and is reflected in visible calendar colors', () => {
+  const card = makeCard({
+    entities: ['calendar.family'],
+    colors: { 'calendar.family': '#112233' },
+    people: [{ tag: 'soraya', color: '#e91e63', name: 'Soraya' }]
+  });
+  const event = { entityId: 'calendar.family', color: '#112233', summary: 'Pickup #soraya' };
+
+  const overrides = card.getEventStyleOverrides(event);
+  assert.equal(overrides.hasExplicitBackgroundColor, true);
+  assert.deepEqual(overrides.backgroundColors, ['#e91e63']);
+  assert.deepEqual(card.getVisibleCalendarColorsForEvent(event), ['#e91e63']);
+
+  const untaggedEvent = { entityId: 'calendar.family', color: '#112233', summary: 'Pickup' };
+  assert.equal(card.getEventStyleOverrides(untaggedEvent).hasExplicitBackgroundColor, false);
+  assert.deepEqual(card.getVisibleCalendarColorsForEvent(untaggedEvent), ['#112233']);
+});
+
+test('combined calendar events resolve person tags per source event', () => {
+  const card = makeCard({
+    entities: ['calendar.a', 'calendar.b'],
+    combine_calendars: true,
+    people: [{ tag: 'soraya', color: '#e91e63', name: 'Soraya' }]
+  });
+  const combined = card.combineDuplicateCalendarEvents([
+    { entityId: 'calendar.a', color: '#ff0000', summary: 'Dup', description: '#soraya', location: '', start: { dateTime: '2026-05-01T10:00:00Z' }, end: { dateTime: '2026-05-01T11:00:00Z' } },
+    { entityId: 'calendar.b', color: '#00ff00', summary: 'Dup', description: '', location: '', start: { dateTime: '2026-05-01T10:00:00Z' }, end: { dateTime: '2026-05-01T11:00:00Z' } }
+  ]).find((e) => e.isCombinedCalendarEvent);
+
+  const overrides = card.getEventStyleOverrides(combined);
+  assert.deepEqual(overrides.backgroundColors, ['#e91e63', '#00ff00']);
+  assert.equal(overrides.hasExplicitBackgroundColor, true);
+});
+
+test('multiple person tags on one event stripe using every matched color, in config-declared order', () => {
+  const card = makeCard({
+    entities: ['calendar.family'],
+    people: [
+      { tag: 'soraya', color: '#e91e63', name: 'Soraya' },
+      { tag: 'jasper', color: '#2196f3', name: 'Jasper' }
+    ]
+  });
+  const event = { entityId: 'calendar.family', color: '#112233', summary: 'Pickup #jasper #soraya' };
+
+  const overrides = card.getEventStyleOverrides(event);
+  assert.deepEqual(overrides.backgroundColors, ['#e91e63', '#2196f3']);
+  assert.equal(overrides.hasExplicitBackgroundColor, true);
+  assert.deepEqual(card.getVisibleCalendarColorsForEvent(event), ['#e91e63', '#2196f3']);
+});
+
+test('multiple person tags stripe even when a custom color or matching event_styles rule is also present', async () => {
+  const { applyCustomEventColor } = await import('./src/events/custom-event-colors.js');
+  const people = [
+    { tag: 'soraya', color: '#e91e63', name: 'Soraya' },
+    { tag: 'jasper', color: '#2196f3', name: 'Jasper' }
+  ];
+
+  const customCard = makeCard({ entities: ['calendar.family'], people });
+  const customEvent = { entityId: 'calendar.family', uid: 'multi-1', color: '#112233', summary: 'Pickup #soraya #jasper' };
+  customCard._customEventColors = applyCustomEventColor(customCard._customEventColors, customEvent, 'this', '#AABBCC', { getEventIdentityKey: customCard.getEventIdentityKey.bind(customCard) });
+  assert.deepEqual(customCard.getEventStyleOverrides(customEvent).backgroundColors, ['#e91e63', '#2196f3']);
+
+  const styledCard = makeCard({
+    entities: ['calendar.family'],
+    people,
+    event_styles: [{ match: { title: 'Pickup' }, style: { background_color: '#123456' } }]
+  });
+  const styledEvent = { entityId: 'calendar.family', color: '#112233', summary: 'Pickup #soraya #jasper' };
+  assert.deepEqual(styledCard.getEventStyleOverrides(styledEvent).backgroundColors, ['#e91e63', '#2196f3']);
+});
+
+test('a single person tag still yields existing precedence - custom color and event_styles still win', async () => {
+  const { applyCustomEventColor } = await import('./src/events/custom-event-colors.js');
+  const people = [{ tag: 'soraya', color: '#e91e63', name: 'Soraya' }];
+
+  const card = makeCard({ entities: ['calendar.family'], people });
+  const event = { entityId: 'calendar.family', uid: 'single-1', color: '#112233', summary: 'Pickup #soraya' };
+  card._customEventColors = applyCustomEventColor(card._customEventColors, event, 'this', '#AABBCC', { getEventIdentityKey: card.getEventIdentityKey.bind(card) });
+  assert.deepEqual(card.getEventStyleOverrides(event).backgroundColors, ['#AABBCC']);
+});
+
+test('getEventStyle renders multi-tagged events as bars, dots, or stripes per combine_style', () => {
+  const people = [
+    { tag: 'soraya', color: '#e91e63', name: 'Soraya' },
+    { tag: 'jasper', color: '#2196f3', name: 'Jasper' }
+  ];
+  const event = { entityId: 'calendar.family', color: '#112233', summary: 'Pickup #soraya #jasper' };
+
+  const barsCard = makeCard({ entities: ['calendar.family'], people, combine_style: 'bars' });
+  assert.match(barsCard.getEventStyle(event), /linear-gradient\(to bottom, #2196[Ff]3 0% 100%\)/);
+
+  const dotsCard = makeCard({ entities: ['calendar.family'], people, combine_style: 'dots' });
+  assert.match(dotsCard.getEventStyle(event), /radial-gradient\(circle at/);
+
+  const stripesCard = makeCard({ entities: ['calendar.family'], people, combine_style: 'stripes' });
+  assert.match(stripesCard.getEventStyle(event), /repeating-linear-gradient\(135deg, #[Ee]91[Ee]63 0px 18px, #2196[Ff]3 18px 36px\)/);
+});
+
+test('getExplicitCardColor (Google write-back) is unaffected by striping - custom color still wins for a multi-tagged event', async () => {
+  const { applyCustomEventColor } = await import('./src/events/custom-event-colors.js');
+  const card = makeCard({
+    entities: ['calendar.family'],
+    people: [
+      { tag: 'soraya', color: '#e91e63', name: 'Soraya' },
+      { tag: 'jasper', color: '#2196f3', name: 'Jasper' }
+    ]
+  });
+  const event = { entityId: 'calendar.family', uid: 'multi-google-1', color: '#112233', summary: 'Pickup #soraya #jasper' };
+  card._customEventColors = applyCustomEventColor(card._customEventColors, event, 'this', '#AABBCC', { getEventIdentityKey: card.getEventIdentityKey.bind(card) });
+
+  // HA rendering stripes (custom color no longer wins here)...
+  assert.deepEqual(card.getEventStyleOverrides(event).backgroundColors, ['#e91e63', '#2196f3']);
+  // ...but the Google write-back path is untouched and still resolves the flat custom color -
+  // documents the deliberate v2/v3 HA-vs-Google inconsistency, not an oversight.
+  assert.equal(card.getExplicitCardColor(event), '#AABBCC');
+});
+
+test('combined calendar events: a source with multiple person tags still contributes only its first-match color', () => {
+  const card = makeCard({
+    entities: ['calendar.a', 'calendar.b'],
+    combine_calendars: true,
+    people: [
+      { tag: 'soraya', color: '#e91e63', name: 'Soraya' },
+      { tag: 'jasper', color: '#2196f3', name: 'Jasper' }
+    ]
+  });
+  const combined = card.combineDuplicateCalendarEvents([
+    { entityId: 'calendar.a', color: '#ff0000', summary: 'Dup', description: '#soraya #jasper', location: '', start: { dateTime: '2026-05-01T10:00:00Z' }, end: { dateTime: '2026-05-01T11:00:00Z' } },
+    { entityId: 'calendar.b', color: '#00ff00', summary: 'Dup', description: '', location: '', start: { dateTime: '2026-05-01T10:00:00Z' }, end: { dateTime: '2026-05-01T11:00:00Z' } }
+  ]).find((e) => e.isCombinedCalendarEvent);
+
+  assert.deepEqual(card.getEventStyleOverrides(combined).backgroundColors, ['#e91e63', '#00ff00']);
+});
+
+test('getExplicitCardColor only surfaces custom, event_styles, and person-tag colors - never color_source_entity, virtual, or static defaults', async () => {
+  const { applyCustomEventColor } = await import('./src/events/custom-event-colors.js');
+
+  const card = makeCard({
+    entities: ['calendar.family'],
+    colors: { 'calendar.family': '#112233' },
+    color_source_entity: 'sensor.google_calendar_event_colors',
+    people: [{ tag: 'soraya', color: '#e91e63', name: 'Soraya' }]
+  });
+  card._hass = {
+    states: {
+      'sensor.google_calendar_event_colors': { attributes: { by_uid: { 'uid-1': '#ff0000' } } }
+    }
+  };
+
+  // Plain event: color_source_entity/static color exist, but neither counts as "explicit".
+  const plainEvent = { entityId: 'calendar.family', uid: 'uid-1', color: '#112233', summary: 'Plain' };
+  assert.equal(card.getExplicitCardColor(plainEvent), null);
+
+  // Person tag counts as explicit.
+  const taggedEvent = { entityId: 'calendar.family', uid: 'uid-1', color: '#112233', summary: 'Pickup #soraya' };
+  assert.equal(card.getExplicitCardColor(taggedEvent), '#e91e63');
+
+  // event_styles rule counts as explicit, and wins over a matching person tag.
+  const styledCard = makeCard({
+    entities: ['calendar.family'],
+    event_styles: [{ match: { title: 'Sync' }, style: { background_color: '#abcdef' } }],
+    people: [{ tag: 'soraya', color: '#e91e63', name: 'Soraya' }]
+  });
+  const styledTaggedEvent = { entityId: 'calendar.family', uid: 'sync-1', summary: 'Sync #soraya' };
+  assert.equal(styledCard.getExplicitCardColor(styledTaggedEvent), '#abcdef');
+
+  // A manual custom color wins over both the event_styles rule and the person tag.
+  styledCard._customEventColors = applyCustomEventColor(
+    styledCard._customEventColors,
+    styledTaggedEvent,
+    'this',
+    '#123456',
+    { getEventIdentityKey: styledCard.getEventIdentityKey.bind(styledCard) }
+  );
+  assert.equal(styledCard.getExplicitCardColor(styledTaggedEvent), '#123456');
+
+  // Defensive: a null event never throws and resolves to null.
+  assert.equal(card.getExplicitCardColor(null), null);
+});
+
+test('pushExplicitColorToGoogle calls set_event_color only when write-back is enabled and an explicit color resolves', async () => {
+  const baseConfig = {
+    entities: ['calendar.family'],
+    color_source_entity: 'sensor.google_calendar_event_colors',
+    people: [{ tag: 'soraya', color: '#e91e63', name: 'Soraya' }]
+  };
+  const taggedEvent = { entityId: 'calendar.family', uid: 'uid-1', summary: 'Pickup #soraya' };
+
+  // Not enabled: never calls the service.
+  const disabledCard = makeCard({ ...baseConfig, google_color_write_back: false });
+  const disabledCalls = [];
+  disabledCard._hass = { callService: async (...args) => disabledCalls.push(args) };
+  await disabledCard.pushExplicitColorToGoogle(taggedEvent);
+  assert.equal(disabledCalls.length, 0);
+
+  // Enabled but no color_source_entity configured: still never calls the service.
+  const noSourceCard = makeCard({ ...baseConfig, color_source_entity: '', google_color_write_back: true });
+  const noSourceCalls = [];
+  noSourceCard._hass = { callService: async (...args) => noSourceCalls.push(args) };
+  await noSourceCard.pushExplicitColorToGoogle(taggedEvent);
+  assert.equal(noSourceCalls.length, 0);
+
+  // Enabled, source configured, but no explicit color resolves: no call.
+  const enabledCard = makeCard({ ...baseConfig, google_color_write_back: true });
+  const untaggedCalls = [];
+  enabledCard._hass = { callService: async (...args) => untaggedCalls.push(args) };
+  await enabledCard.pushExplicitColorToGoogle({ entityId: 'calendar.family', uid: 'uid-1', summary: 'Plain' });
+  assert.equal(untaggedCalls.length, 0);
+
+  // Enabled, source configured, explicit person-tag color resolves: calls the service.
+  const calls = [];
+  enabledCard._hass = { callService: async (...args) => calls.push(args) };
+  await enabledCard.pushExplicitColorToGoogle(taggedEvent);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], ['google_calendar_colors', 'set_event_color', {
+    uid: 'uid-1',
+    recurrence_id: undefined,
+    color: '#e91e63'
+  }]);
+
+  // A rejected service call is caught, never thrown past pushExplicitColorToGoogle.
+  enabledCard._hass = { callService: async () => { throw new Error('service unavailable'); } };
+  await assert.doesNotReject(() => enabledCard.pushExplicitColorToGoogle(taggedEvent));
 });
 
 test('editor color swatches show effective calendar and event font colors', () => {
@@ -6939,6 +7409,47 @@ test('event custom color modal uses shared picker for apply, default, and recurr
   card.showCustomColorModal(event, event);
   handlers.default();
   assert.equal(card.getCustomEventColor(event), null);
+});
+
+test('applying a custom event color pushes it back to Google Calendar when write-back is enabled', () => {
+  const card = makeCard({
+    entities: ['calendar.a'],
+    color_source_entity: 'sensor.google_calendar_event_colors',
+    google_color_write_back: true
+  });
+  const calls = [];
+  card._hass = { callService: async (...args) => calls.push(args) };
+  const event = { entityId: 'calendar.a', uid: 'event-picker', color: '#111111', summary: 'Event Picker', start: { dateTime: '2026-05-01T10:00:00Z' }, end: { dateTime: '2026-05-01T11:00:00Z' } };
+  const content = { innerHTML: '' };
+  const modal = { classList: { add: () => {}, remove: () => {} } };
+  const handlers = {};
+  const picker = { value: '#222222', addEventListener: (name, callback) => { handlers[`picker:${name}`] = callback; } };
+  const makeButton = (id) => ({ addEventListener: (name, callback) => { handlers[id] = callback; } });
+  card.applyEventModalSizeClass = () => {};
+  card.getRootElementById = (id) => ({
+    'event-modal': modal,
+    'modal-content': content,
+    'custom-color-wheel': picker,
+    'close-custom-color-modal': makeButton('close'),
+    'cancel-custom-color-btn': makeButton('cancel'),
+    'apply-custom-color-btn': makeButton('apply'),
+    'custom-color-default-btn': makeButton('default')
+  }[id] || null);
+  card._root = { querySelector: () => ({ value: 'this' }) };
+  card.persistPreferences = () => {};
+  card.render = () => {};
+  card.showEventModal = () => {};
+
+  card.showCustomColorModal(event, event);
+  handlers['picker:color-change']({ detail: { color: '#e91e63' } });
+  handlers.apply();
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], ['google_calendar_colors', 'set_event_color', {
+    uid: 'event-picker',
+    recurrence_id: undefined,
+    color: '#E91E63'
+  }]);
 });
 
 test('custom event colors resolve exact, recurring, future, reset, and malformed entries', async () => {

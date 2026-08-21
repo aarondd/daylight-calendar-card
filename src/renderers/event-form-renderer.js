@@ -86,6 +86,30 @@ function renderRecurrenceControls({
           </div>`;
 }
 
+function renderPeopleFieldGroup({ people, checkedTagKeys, helpers }) {
+  if (!Array.isArray(people) || people.length === 0) return '';
+  const { escapeHtml, escapeHtmlAttribute, t } = helpers;
+  const checked = checkedTagKeys instanceof Set ? checkedTagKeys : new Set(checkedTagKeys || []);
+
+  return `
+          <div class="form-group" id="event-people-group">
+            <label class="form-label">${t('people')}</label>
+            <div class="form-checkbox-grid">
+              ${people.map((person) => `
+                <label class="form-checkbox-group" style="margin: 0;">
+                  <input
+                    type="checkbox"
+                    class="form-checkbox event-person-tag"
+                    value="${escapeHtmlAttribute(person.tag)}"
+                    ${checked.has(person.tag) ? 'checked' : ''}
+                  />
+                  <span class="form-checkbox-label">${escapeHtml(person.name || person.tag)}</span>
+                </label>
+              `).join('')}
+            </div>
+          </div>`;
+}
+
 function renderEventFields({
   title,
   location,
@@ -99,6 +123,8 @@ function renderEventFields({
   recurrenceData,
   recurrenceEndMode,
   recurrenceWeekdayOptions,
+  people,
+  checkedTagKeys,
   helpers
 }) {
   const { escapeHtml, escapeHtmlAttribute, t } = helpers;
@@ -188,6 +214,7 @@ ${renderRecurrenceControls({
             <label class="form-label">${t('description')}</label>
             <textarea class="form-textarea" id="event-description" placeholder="${escapeHtmlAttribute(t('descriptionPlaceholder'))}">${escapeHtml(description || '')}</textarea>
           </div>
+${renderPeopleFieldGroup({ people, checkedTagKeys, helpers })}
 
           <div id="form-error" class="error-message" style="display: none;"></div>`;
 }
@@ -205,6 +232,8 @@ export function renderCreateEventForm({
   isPrefilledAllDay,
   recurrenceEndMode,
   recurrenceWeekdayOptions,
+  people,
+  checkedTagKeys,
   helpers
 }) {
   const { escapeHtml, getCalendarName, t } = helpers;
@@ -250,6 +279,8 @@ ${renderEventFields({
     recurrenceData,
     recurrenceEndMode,
     recurrenceWeekdayOptions,
+    people,
+    checkedTagKeys,
     helpers
   })}
 
@@ -273,6 +304,8 @@ export function renderEditEventForm({
   recurringSelectedByDefault,
   recurrenceEndMode,
   recurrenceWeekdayOptions,
+  people,
+  checkedTagKeys,
   helpers
 }) {
   const { escapeHtml, getCalendarName, t } = helpers;
@@ -310,6 +343,8 @@ ${renderEventFields({
     recurrenceData,
     recurrenceEndMode,
     recurrenceWeekdayOptions,
+    people,
+    checkedTagKeys,
     helpers
   })}
 

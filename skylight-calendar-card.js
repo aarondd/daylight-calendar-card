@@ -125,6 +125,7 @@ const DEFAULT_CONFIG_VALUES = {
   readonly_calendars: [],
   hide_badge_calendars: [],
   virtual_calendars: [],
+  people: [],
   language: null,
   locale: null,
   preference_storage_key: null
@@ -383,6 +384,7 @@ function createConfigNormalizationSchema({
   normalizeBackgroundOpacity,
   normalizeEventModalSize,
   normalizeVirtualCalendars,
+  normalizePeople,
   normalizeDefaultDarkMode,
   getDefaultTitle
 }) {
@@ -434,6 +436,7 @@ function createConfigNormalizationSchema({
       { key: 'header_time_sensor', defaultValue: ({ derived }) => derived.normalizedHeaderTimeSensor, normalize: ({ derived }) => derived.normalizedHeaderTimeSensor },
       { key: 'header_weather_sensor', defaultValue: ({ derived }) => derived.normalizedHeaderWeatherSensor, normalize: ({ derived }) => derived.normalizedHeaderWeatherSensor },
       { key: 'color_source_entity', defaultValue: ({ derived }) => derived.normalizedColorSourceEntity, normalize: ({ derived }) => derived.normalizedColorSourceEntity },
+      { key: 'google_color_write_back', defaultValue: ({ rawConfig }) => rawConfig.google_color_write_back === true, normalize: ({ rawConfig }) => rawConfig.google_color_write_back === true },
       { key: 'header_items', defaultValue: ({ derived }) => derived.normalizedHeaderItems, normalize: ({ derived }) => derived.normalizedHeaderItems },
       { key: 'hide_event_calendar_bubble', defaultValue: ({ rawConfig }) => rawConfig.hide_event_calendar_bubble || DEFAULT_CONFIG_VALUES.hide_event_calendar_bubble },
       { key: 'show_event_location', defaultValue: ({ rawConfig }) => rawConfig.show_event_location || DEFAULT_CONFIG_VALUES.show_event_location },
@@ -475,6 +478,7 @@ function createConfigNormalizationSchema({
       { key: 'hide_badge_calendars', defaultValue: ({ rawConfig }) => rawConfig.hide_badge_calendars || [...DEFAULT_CONFIG_VALUES.hide_badge_calendars] },
       { key: 'default_hidden_calendars', defaultValue: ({ derived }) => derived.normalizedDefaultHiddenCalendars, normalize: ({ derived }) => derived.normalizedDefaultHiddenCalendars },
       { key: 'virtual_calendars', defaultValue: ({ rawConfig }) => normalizeVirtualCalendars(rawConfig.virtual_calendars || [...DEFAULT_CONFIG_VALUES.virtual_calendars]) },
+      { key: 'people', defaultValue: ({ rawConfig }) => normalizePeople(rawConfig.people || [...DEFAULT_CONFIG_VALUES.people]) },
       { key: 'language', defaultValue: ({ rawConfig }) => rawConfig.language || DEFAULT_CONFIG_VALUES.language },
       { key: 'locale', defaultValue: ({ rawConfig }) => rawConfig.locale || DEFAULT_CONFIG_VALUES.locale },
       { key: 'color_scheme', defaultValue: ({ rawConfig }) => normalizeDefaultDarkMode(rawConfig.color_scheme), normalize: ({ rawConfig }) => normalizeDefaultDarkMode(rawConfig.color_scheme) },
@@ -1213,6 +1217,44 @@ const detectStaleSkylightResource = (documentLike = globalThis.document) => {
 
 const DEFAULT_COLOR_PICKER_PRESETS = ['#ffffff', '#ff0000', '#ffff00', '#00ff00', '#000000', '#00ffff', '#0000ff', '#ff00ff'];
 
+const GOOGLE_CALENDAR_EVENT_COLORS = [
+  { name: 'Tomato', hex: '#D50000' },
+  { name: 'Flamingo', hex: '#E67C73' },
+  { name: 'Tangerine', hex: '#F4511E' },
+  { name: 'Banana', hex: '#F6BF26' },
+  { name: 'Sage', hex: '#33B679' },
+  { name: 'Basil', hex: '#0B8043' },
+  { name: 'Peacock', hex: '#039BE5' },
+  { name: 'Blueberry', hex: '#3F51B5' },
+  { name: 'Lavender', hex: '#7986CB' },
+  { name: 'Grape', hex: '#8E24AA' },
+  { name: 'Graphite', hex: '#616161' }
+];
+
+const RECENT_COLORS_STORAGE_KEY = 'daylight-calendar-card-recent-colors';
+const MAX_RECENT_COLORS = 8;
+
+function getRecentPickerColors() {
+  try {
+    const raw = window.localStorage?.getItem(RECENT_COLORS_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((hex) => typeof hex === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function recordRecentPickerColor(hex) {
+  const normalized = normalizePickerHexColor(hex);
+  if (!normalized) return;
+  try {
+    const next = [normalized, ...getRecentPickerColors().filter((color) => color !== normalized)].slice(0, MAX_RECENT_COLORS);
+    window.localStorage?.setItem(RECENT_COLORS_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // Storage unavailable (private browsing, quota, etc.) - recents are a convenience, not required.
+  }
+}
+
 function normalizePickerHexColor(value, fallback = null) {
   const raw = String(value || '').trim();
   if (!raw) return fallback;
@@ -1273,15 +1315,24 @@ class DaylightColorPicker extends HTMLElement {
     this._h = 0;
     this._s = 1;
     this._v = 1;
-    this._presets = DEFAULT_COLOR_PICKER_PRESETS;
+    this._inUseColors = [];
     this._dragging = false;
   }
   connectedCallback() { this.value = this.getAttribute('value') || this._value; this.render(); }
   attributeChangedCallback(name, oldValue, newValue) { if (oldValue !== newValue) { if (name === 'value') this.value = newValue; if (this.isConnected) this.render(); } }
   get value() { return this._value; }
   set value(nextValue) { const normalized = normalizePickerHexColor(nextValue, this._value || '#3f51b5'); const hsv = hexToHsv(normalized); this._value = normalized; this._h = hsv.h; this._s = hsv.s; this._v = hsv.v; this.syncUi(); }
-  get presets() { return this._presets; }
-  set presets(values) { this._presets = Array.isArray(values) && values.length ? values.map((color) => normalizePickerHexColor(color)).filter(Boolean) : DEFAULT_COLOR_PICKER_PRESETS; if (this.isConnected) this.render(); }
+  get inUseColors() { return this._inUseColors; }
+  set inUseColors(values) { this._inUseColors = Array.isArray(values) ? Array.from(new Set(values.map((color) => normalizePickerHexColor(color)).filter(Boolean))) : []; if (this.isConnected) this.render(); }
+  getPresetGroups() {
+    const recent = getRecentPickerColors().filter((hex) => !this._inUseColors.includes(hex));
+    const groups = [
+      { label: 'In use', colors: this._inUseColors.map((hex) => ({ hex })) },
+      { label: 'Recent', colors: recent.map((hex) => ({ hex })) },
+      { label: 'Google Calendar', colors: GOOGLE_CALENDAR_EVENT_COLORS }
+    ];
+    return groups.filter((group) => group.colors.length > 0);
+  }
   get showActions() { return this.getAttribute('show-actions') !== 'false'; }
   setColorFromHsv(h, s, v, { emit = true } = {}) { this._h = h; this._s = Math.max(0, Math.min(1, s)); this._v = Math.max(0.05, Math.min(1, v)); this._value = hsvToHex(this._h, this._s, this._v); this.syncUi(); if (emit) this.emitColorChange(); }
   setColorFromHex(value, { emit = true } = {}) { const normalized = normalizePickerHexColor(value); if (!normalized) return false; const hsv = hexToHsv(normalized); this._value = normalized; this._h = hsv.h; this._s = hsv.s; this._v = hsv.v; this.syncUi(); if (emit) this.emitColorChange(); return true; }
@@ -1309,12 +1360,23 @@ class DaylightColorPicker extends HTMLElement {
     const hexInput = root.querySelector('#color-picker-hex');
     if (hexInput) { const syncHex = () => this.setColorFromHex(hexInput.value); hexInput.addEventListener('input', syncHex); hexInput.addEventListener('change', syncHex); }
     root.querySelector('[data-color-cancel]')?.addEventListener('click', () => this.dispatchEvent(new CustomEvent('color-cancel', { detail: { color: this._value }, bubbles: true, composed: true })));
-    root.querySelector('[data-color-confirm]')?.addEventListener('click', () => this.dispatchEvent(new CustomEvent('color-confirm', { detail: { color: this._value }, bubbles: true, composed: true })));
+    root.querySelector('[data-color-confirm]')?.addEventListener('click', () => {
+      recordRecentPickerColor(this._value);
+      this.dispatchEvent(new CustomEvent('color-confirm', { detail: { color: this._value }, bubbles: true, composed: true }));
+    });
   }
   render() {
     if (!this.shadowRoot) return;
     const title = this.getAttribute('title') || 'Select color'; const confirmLabel = this.getAttribute('confirm-label') || 'Set'; const cancelLabel = this.getAttribute('cancel-label') || 'Cancel';
-    this.shadowRoot.innerHTML = `<style>:host{display:block;color:var(--primary-text-color)}.color-picker-modal{display:grid;gap:12px}.color-picker-title{font-size:1.8rem;font-weight:600}.color-picker-wheel{position:relative;width:min(260px,calc(100vw - 64px));max-width:100%;aspect-ratio:1;border-radius:50%;margin:0 auto;touch-action:none;background:radial-gradient(circle at center,#ffffff 0%,rgba(255,255,255,.85) 16%,rgba(255,255,255,0) 58%),conic-gradient(from 0deg,#ff0000,#ff7f00,#ffff00,#00ff00,#00ffff,#0000ff,#8b00ff,#ff00ff,#ff0000)}.color-picker-wheel-marker{position:absolute;width:16px;height:16px;border-radius:50%;border:2px solid white;box-shadow:0 0 0 1px rgba(0,0,0,.5);transform:translate(-50%,-50%);pointer-events:none}.color-picker-controls{display:grid;gap:6px}.color-picker-controls input[type="text"]{padding:8px;border:1px solid var(--divider-color);border-radius:6px;font:inherit;color:var(--primary-text-color);background:var(--card-background-color);min-width:0}.color-picker-presets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.color-preset{width:100%;aspect-ratio:1;border-radius:50%;border:2px solid rgba(0,0,0,.08);cursor:pointer;min-height:36px}.color-picker-selected-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.color-picker-preview{width:24px;height:24px;border-radius:4px;border:1px solid var(--divider-color)}.color-picker-value{font-family:monospace}.color-picker-actions{display:flex;justify-content:flex-end;gap:10px}.color-picker-actions button{border:1px solid var(--divider-color);background:var(--card-background-color);border-radius:6px;padding:8px 12px;cursor:pointer;color:var(--primary-text-color)}.color-picker-actions button.primary{background:var(--primary-color);color:white;border-color:transparent}</style><div class="color-picker-modal" role="group" aria-label="${title}"><div class="color-picker-title">${title}</div><div class="color-picker-wheel" id="color-picker-wheel"><div class="color-picker-wheel-marker"></div></div><div class="color-picker-controls"><label for="color-picker-brightness">Color brightness</label><input id="color-picker-brightness" type="range" min="5" max="100" step="1"></div><div class="color-picker-controls"><label for="color-picker-hex">Hex color</label><input id="color-picker-hex" type="text" placeholder="#3f51b5"></div><div class="color-picker-presets">${this._presets.map((color) => `<button type="button" class="color-preset" data-color-preset="${color}" style="background:${color}"></button>`).join('')}</div><div class="color-picker-selected-row"><span>Chosen color</span><span class="color-picker-preview"></span><span class="color-picker-value"></span></div>${this.showActions ? `<div class="color-picker-actions"><button type="button" data-color-cancel>${cancelLabel}</button><button type="button" class="primary" data-color-confirm>${confirmLabel}</button></div>` : ''}</div>`;
+    const presetGroupsMarkup = this.getPresetGroups().map((group) => `
+      <div class="color-picker-preset-group">
+        <div class="color-picker-preset-group-label">${group.label}</div>
+        <div class="color-picker-presets">
+          ${group.colors.map(({ hex, name }) => `<button type="button" class="color-preset" data-color-preset="${hex}" style="background:${hex}" title="${name ? `${name} (${hex})` : hex}"></button>`).join('')}
+        </div>
+      </div>
+    `).join('');
+    this.shadowRoot.innerHTML = `<style>:host{display:block;color:var(--primary-text-color)}.color-picker-modal{display:grid;gap:12px}.color-picker-title{font-size:1.8rem;font-weight:600}.color-picker-wheel{position:relative;width:min(260px,calc(100vw - 64px));max-width:100%;aspect-ratio:1;border-radius:50%;margin:0 auto;touch-action:none;background:radial-gradient(circle at center,#ffffff 0%,rgba(255,255,255,.85) 16%,rgba(255,255,255,0) 58%),conic-gradient(from 0deg,#ff0000,#ff7f00,#ffff00,#00ff00,#00ffff,#0000ff,#8b00ff,#ff00ff,#ff0000)}.color-picker-wheel-marker{position:absolute;width:16px;height:16px;border-radius:50%;border:2px solid white;box-shadow:0 0 0 1px rgba(0,0,0,.5);transform:translate(-50%,-50%);pointer-events:none}.color-picker-controls{display:grid;gap:6px}.color-picker-controls input[type="text"]{padding:8px;border:1px solid var(--divider-color);border-radius:6px;font:inherit;color:var(--primary-text-color);background:var(--card-background-color);min-width:0}.color-picker-preset-group{display:grid;gap:6px}.color-picker-preset-group-label{font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.03em;opacity:.7}.color-picker-presets{display:grid;grid-template-columns:repeat(auto-fill,minmax(28px,1fr));gap:10px}.color-preset{width:100%;aspect-ratio:1;border-radius:50%;border:2px solid rgba(0,0,0,.08);cursor:pointer;min-height:28px}.color-picker-selected-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.color-picker-preview{width:24px;height:24px;border-radius:4px;border:1px solid var(--divider-color)}.color-picker-value{font-family:monospace}.color-picker-actions{display:flex;justify-content:flex-end;gap:10px}.color-picker-actions button{border:1px solid var(--divider-color);background:var(--card-background-color);border-radius:6px;padding:8px 12px;cursor:pointer;color:var(--primary-text-color)}.color-picker-actions button.primary{background:var(--primary-color);color:white;border-color:transparent}</style><div class="color-picker-modal" role="group" aria-label="${title}"><div class="color-picker-title">${title}</div><div class="color-picker-wheel" id="color-picker-wheel"><div class="color-picker-wheel-marker"></div></div><div class="color-picker-controls"><label for="color-picker-brightness">Color brightness</label><input id="color-picker-brightness" type="range" min="5" max="100" step="1"></div><div class="color-picker-controls"><label for="color-picker-hex">Hex color</label><input id="color-picker-hex" type="text" placeholder="#3f51b5"></div>${presetGroupsMarkup}<div class="color-picker-selected-row"><span>Chosen color</span><span class="color-picker-preview"></span><span class="color-picker-value"></span></div>${this.showActions ? `<div class="color-picker-actions"><button type="button" data-color-cancel>${cancelLabel}</button><button type="button" class="primary" data-color-confirm>${confirmLabel}</button></div>` : ''}</div>`;
     this.bindEvents(); this.syncUi();
   }
 }
@@ -1663,6 +1725,9 @@ class SkylightCalendarCardEditor extends HTMLElement {
     if (field === 'virtual_calendar_color') {
       return this.getEditorVirtualCalendarColor(Number(mapKey));
     }
+    if (field === 'person_color') {
+      return this.getEditorPersonColor(Number(mapKey));
+    }
     if (mapKey) {
       return this.getEditorMapColorValue(field, mapKey);
     }
@@ -1680,12 +1745,28 @@ class SkylightCalendarCardEditor extends HTMLElement {
     );
   }
 
+  getInUseColorsForPicker() {
+    const rawValues = [
+      ...Object.values(this._config.colors || {}),
+      ...Object.values(this._config.event_font_colors || {}),
+      ...(this._config.people || []).map((person) => person?.color),
+      ...(this._config.virtual_calendars || []).map((virtualCalendar) => virtualCalendar?.color),
+      this._config.header_color,
+      this._config.header_text_color,
+      this._config.event_neutral_background
+    ];
+    return Array.from(new Set(rawValues.map((value) => this.normalizeHexColor(value)).filter(Boolean)));
+  }
+
   openColorPicker(field, mapKey = null) {
     const initialColor = this.getColorValue(field, mapKey);
     this._colorPickerState = { field, mapKey, color: initialColor };
     const dialog = this.querySelector('.color-picker-dialog');
     const picker = this.querySelector('daylight-color-picker');
-    if (picker) picker.value = initialColor;
+    if (picker) {
+      picker.inUseColors = this.getInUseColorsForPicker();
+      picker.value = initialColor;
+    }
     if (dialog) dialog.classList.add('show');
   }
 
@@ -1702,6 +1783,12 @@ class SkylightCalendarCardEditor extends HTMLElement {
 
     if (field === 'virtual_calendar_color') {
       this.updateVirtualCalendar(Number(mapKey), { color: selectedColor }, { render: true });
+      this.closeColorPicker();
+      return;
+    }
+
+    if (field === 'person_color') {
+      this.updatePerson(Number(mapKey), { color: selectedColor }, { render: true });
       this.closeColorPicker();
       return;
     }
@@ -2019,6 +2106,205 @@ class SkylightCalendarCardEditor extends HTMLElement {
       .map((input) => input.value)
       .filter((entityId) => typeof entityId === 'string' && entityId.startsWith('calendar.'));
     this.updateVirtualCalendar(index, { entities: checkedEntities });
+  }
+
+  getPeopleForEditor() {
+    return Array.isArray(this._config.people) ? this._config.people : [];
+  }
+
+  getRenderablePeopleForEditor() {
+    return this.getPeopleForEditor()
+      .map((person, index) => ({ person, index }))
+      .filter(({ person }) => person && typeof person === 'object' && !Array.isArray(person));
+  }
+
+  sanitizePersonForEditor(person) {
+    const nextPerson = {
+      ...(person && typeof person === 'object' ? person : {})
+    };
+
+    nextPerson.tag = String(nextPerson.tag || '').trim().replace(/^#/, '');
+    nextPerson.name = String(nextPerson.name || '').trim();
+
+    const color = String(nextPerson.color || '').trim();
+    nextPerson.color = color || null;
+
+    const personEntity = String(nextPerson.person_entity || '').trim();
+    nextPerson.person_entity = personEntity || null;
+
+    return nextPerson;
+  }
+
+  getPersonTagValidation(index) {
+    const people = this.getPeopleForEditor();
+    const person = people[index];
+    if (!person || typeof person !== 'object') return '';
+
+    const tag = String(person.tag || '').trim().replace(/^#/, '');
+    if (!tag) return 'Tag is required for matching events.';
+    if (!/^[A-Za-z0-9_]+$/.test(tag)) return 'Tag may only contain letters, numbers, and underscores.';
+
+    const duplicateIndex = people.findIndex((otherPerson, otherIndex) => (
+      otherIndex !== index &&
+      otherPerson &&
+      typeof otherPerson === 'object' &&
+      String(otherPerson.tag || '').trim().replace(/^#/, '').toLowerCase() === tag.toLowerCase()
+    ));
+
+    return duplicateIndex === -1 ? '' : 'Tag duplicates another person.';
+  }
+
+  getEditorPersonColor(index) {
+    const person = this.getPeopleForEditor()[index];
+    return this.toColorInputValue(person?.color);
+  }
+
+  renderPeopleEditor() {
+    const renderablePeople = this.getRenderablePeopleForEditor();
+
+    return `
+      <div class="people-editor">
+        <p class="helper">Link a color to a person. Tag an event with <code>#tag</code> (in the title or description) from either Home Assistant or Google Calendar to color it that person's color. Multiple people can be tagged on one event.</p>
+        ${renderablePeople.length ? renderablePeople
+          .map(({ person, index }, renderIndex) => this.renderPersonRow(person, index, renderIndex, renderablePeople.length))
+          .join('') : '<p class="helper">No people configured yet.</p>'}
+        <button type="button" class="secondary-action" data-person-action="add">Add person</button>
+      </div>
+    `;
+  }
+
+  renderPersonRow(person, index, renderIndex = index, renderCount = this.getRenderablePeopleForEditor().length) {
+    const personName = String(person.name || '').trim();
+    const personTag = String(person.tag || '').trim().replace(/^#/, '');
+    const personColor = String(person.color || '').trim();
+    const personEntity = String(person.person_entity || '').trim();
+    const tagValidation = this.getPersonTagValidation(index);
+    const tagValidationMarkup = tagValidation
+      ? `<p class="validation-message" id="person-tag-error-${index}">${this.escapeHtml(tagValidation)}</p>`
+      : '';
+    const colorStatusMarkup = personColor
+      ? `<span class="virtual-calendar-color-status">Color: ${this.escapeHtml(personColor)}</span>`
+      : '<span class="virtual-calendar-color-status no-override">No color set</span>';
+
+    return `
+      <div class="virtual-calendar-card" data-person-card="${index}">
+        <div class="virtual-calendar-card-header">
+          <strong>${this.escapeHtml(personName || (personTag ? `#${personTag}` : `Person ${renderIndex + 1}`))}</strong>
+          <div class="virtual-calendar-actions">
+            <button type="button" title="Move up" data-person-action="move-up" data-person-index="${index}" ${renderIndex === 0 ? 'disabled' : ''}>↑</button>
+            <button type="button" title="Move down" data-person-action="move-down" data-person-index="${index}" ${renderIndex === renderCount - 1 ? 'disabled' : ''}>↓</button>
+            <button type="button" title="Remove" data-person-action="remove" data-person-index="${index}">Remove</button>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="person-name-${index}">Name</label>
+            <input id="person-name-${index}" type="text" data-person-field="name" data-person-index="${index}" value="${this.escapeHtml(personName)}" placeholder="Soraya">
+          </div>
+          <div class="field">
+            <label for="person-tag-${index}">Tag</label>
+            <input id="person-tag-${index}" type="text" data-person-field="tag" data-person-index="${index}" value="${this.escapeHtml(personTag)}" placeholder="soraya" ${tagValidation ? 'aria-invalid="true"' : ''} ${tagValidation ? `aria-describedby="person-tag-error-${index}"` : ''}>
+            ${tagValidationMarkup}
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field virtual-calendar-color-field">
+            <label for="person-color-${index}">Color</label>
+            <div class="virtual-calendar-color-row">
+              ${this.renderColorInputControl({ id: `person-color-picker-${index}`, field: 'person_color', mapKey: String(index), value: personColor })}
+              <input id="person-color-${index}" type="text" data-person-field="color" data-person-index="${index}" value="${this.escapeHtml(personColor)}" placeholder="#e91e63">
+              ${colorStatusMarkup}
+            </div>
+          </div>
+          <div class="field">
+            <label for="person-entity-${index}">Linked person entity (optional)</label>
+            <input id="person-entity-${index}" type="text" data-person-field="person_entity" data-person-index="${index}" value="${this.escapeHtml(personEntity)}" placeholder="person.soraya">
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  updatePerson(index, patch, { render = false } = {}) {
+    const people = [...this.getPeopleForEditor()];
+    if (index < 0 || index >= people.length) return;
+    const currentPerson = people[index];
+    if (!currentPerson || typeof currentPerson !== 'object' || Array.isArray(currentPerson)) return;
+
+    people[index] = this.sanitizePersonForEditor({
+      ...currentPerson,
+      ...patch
+    });
+
+    this.emitConfigChanged({
+      ...this.value,
+      people
+    });
+
+    if (render) this.render();
+    else this.updateFieldValues();
+  }
+
+  addPerson() {
+    const people = [...this.getPeopleForEditor()];
+    people.push({
+      name: '',
+      tag: '',
+      color: null,
+      person_entity: null
+    });
+
+    this.emitConfigChanged({
+      ...this.value,
+      people
+    });
+    this.render();
+  }
+
+  removePerson(index) {
+    const people = [...this.getPeopleForEditor()];
+    if (index < 0 || index >= people.length) return;
+    people.splice(index, 1);
+
+    this.emitConfigChanged({
+      ...this.value,
+      people
+    });
+    this.render();
+  }
+
+  movePerson(index, direction) {
+    const renderablePeople = this.getRenderablePeopleForEditor();
+    const renderIndex = renderablePeople.findIndex((entry) => entry.index === index);
+    const swapEntry = renderablePeople[renderIndex + direction];
+    const people = [...this.getPeopleForEditor()];
+    if (renderIndex === -1 || !swapEntry || index < 0 || index >= people.length) return;
+    [people[index], people[swapEntry.index]] = [people[swapEntry.index], people[index]];
+
+    this.emitConfigChanged({
+      ...this.value,
+      people
+    });
+    this.render();
+  }
+
+  handlePersonAction(event) {
+    const action = event.currentTarget.dataset.personAction;
+    const index = Number(event.currentTarget.dataset.personIndex);
+    if (action === 'add') this.addPerson();
+    else if (action === 'remove') this.removePerson(index);
+    else if (action === 'move-up') this.movePerson(index, -1);
+    else if (action === 'move-down') this.movePerson(index, 1);
+  }
+
+  handlePersonInput(event) {
+    const index = Number(event.target.dataset.personIndex);
+    const field = event.target.dataset.personField;
+    if (!field) return;
+    const value = String(event.target.value || '').trim();
+    this.updatePerson(index, {
+      [field]: field === 'color' || field === 'person_entity' ? (value || null) : value
+    }, { render: field === 'tag' || field === 'name' || field === 'color' });
   }
 
   renderWeekdayCheckboxes() {
@@ -2351,6 +2637,7 @@ class SkylightCalendarCardEditor extends HTMLElement {
       ${this.renderSubSection('Hide header badges for calendars', `<div class="list-checkbox-grid">${this.renderCalendarListCheckboxes('hide_badge_calendars', { label: 'hidden header badges calendars' })}</div>`)}
       ${this.renderSubSection('Calendars hidden by default', `<div class="list-checkbox-grid">${this.renderCalendarListCheckboxes('default_hidden_calendars', { label: 'calendars hidden by default' })}</div>`)}
       ${this.renderSubSection('Virtual calendars', this.renderVirtualCalendarsEditor())}
+      ${this.renderSubSection('People', this.renderPeopleEditor())}
     `);
 
     const localeSection = this.renderSection('Localization & preferences', `
@@ -2383,6 +2670,10 @@ class SkylightCalendarCardEditor extends HTMLElement {
           <label for="color_source_entity">Event color source entity</label>
           <input id="color_source_entity" data-field="color_source_entity" type="text" value="${this._config.color_source_entity || ''}" placeholder="sensor.google_calendar_event_colors">
         </div>
+      </div>
+      <div class="field-row">
+        <label><input type="checkbox" data-field="google_color_write_back" ${this._config.google_color_write_back ? 'checked' : ''}> Push custom/style/person-tag colors back to Google Calendar</label>
+        <p class="helper">Requires a write-capable <code>google_calendar_colors</code> integration version and Google account re-authentication. Only pushes colors this card explicitly decided (a custom event color, an <code>event_styles</code> rule, or a person tag) - it never touches events with no explicit card-level color.</p>
       </div>
       <div class="field field-inline">
         <label for="preference_storage_key">Preference storage key</label>
@@ -2814,6 +3105,14 @@ class SkylightCalendarCardEditor extends HTMLElement {
 
     this.querySelectorAll('[data-virtual-calendar-entity]').forEach((input) => {
       input.addEventListener('change', (event) => this.handleVirtualCalendarEntityChange(event));
+    });
+
+    this.querySelectorAll('[data-person-action]').forEach((button) => {
+      button.addEventListener('click', (event) => this.handlePersonAction(event));
+    });
+
+    this.querySelectorAll('[data-person-field]').forEach((input) => {
+      input.addEventListener('change', (event) => this.handlePersonInput(event));
     });
 
     this.querySelectorAll('[data-color-trigger]').forEach((trigger) => {
@@ -6139,6 +6438,7 @@ const TRANSLATIONS = {
       copyAddress: 'Copy address',
       description: 'Description',
       descriptionPlaceholder: 'Event details...',
+      people: 'People',
       cancel: 'Cancel',
       createEvent: 'Create Event',
       creating: 'Creating...',
@@ -9865,6 +10165,30 @@ function renderRecurrenceControls({
           </div>`;
 }
 
+function renderPeopleFieldGroup({ people, checkedTagKeys, helpers }) {
+  if (!Array.isArray(people) || people.length === 0) return '';
+  const { escapeHtml, escapeHtmlAttribute, t } = helpers;
+  const checked = checkedTagKeys instanceof Set ? checkedTagKeys : new Set(checkedTagKeys || []);
+
+  return `
+          <div class="form-group" id="event-people-group">
+            <label class="form-label">${t('people')}</label>
+            <div class="form-checkbox-grid">
+              ${people.map((person) => `
+                <label class="form-checkbox-group" style="margin: 0;">
+                  <input
+                    type="checkbox"
+                    class="form-checkbox event-person-tag"
+                    value="${escapeHtmlAttribute(person.tag)}"
+                    ${checked.has(person.tag) ? 'checked' : ''}
+                  />
+                  <span class="form-checkbox-label">${escapeHtml(person.name || person.tag)}</span>
+                </label>
+              `).join('')}
+            </div>
+          </div>`;
+}
+
 function renderEventFields({
   title,
   location,
@@ -9878,6 +10202,8 @@ function renderEventFields({
   recurrenceData,
   recurrenceEndMode,
   recurrenceWeekdayOptions,
+  people,
+  checkedTagKeys,
   helpers
 }) {
   const { escapeHtml, escapeHtmlAttribute, t } = helpers;
@@ -9967,6 +10293,7 @@ ${renderRecurrenceControls({
             <label class="form-label">${t('description')}</label>
             <textarea class="form-textarea" id="event-description" placeholder="${escapeHtmlAttribute(t('descriptionPlaceholder'))}">${escapeHtml(description || '')}</textarea>
           </div>
+${renderPeopleFieldGroup({ people, checkedTagKeys, helpers })}
 
           <div id="form-error" class="error-message" style="display: none;"></div>`;
 }
@@ -9984,6 +10311,8 @@ function renderCreateEventForm({
   isPrefilledAllDay,
   recurrenceEndMode,
   recurrenceWeekdayOptions,
+  people,
+  checkedTagKeys,
   helpers
 }) {
   const { escapeHtml, getCalendarName, t } = helpers;
@@ -10029,6 +10358,8 @@ ${renderEventFields({
     recurrenceData,
     recurrenceEndMode,
     recurrenceWeekdayOptions,
+    people,
+    checkedTagKeys,
     helpers
   })}
 
@@ -10052,6 +10383,8 @@ function renderEditEventForm({
   recurringSelectedByDefault,
   recurrenceEndMode,
   recurrenceWeekdayOptions,
+  people,
+  checkedTagKeys,
   helpers
 }) {
   const { escapeHtml, getCalendarName, t } = helpers;
@@ -10089,6 +10422,8 @@ ${renderEventFields({
     recurrenceData,
     recurrenceEndMode,
     recurrenceWeekdayOptions,
+    people,
+    checkedTagKeys,
     helpers
   })}
 
@@ -10700,6 +11035,111 @@ function getCalendarBadgePersonEntityId(badgeEntityId, calendarPersonEntities = 
   }
 
   return null;
+}
+
+const TAG_CHARSET_PATTERN = /^[A-Za-z0-9_]+$/;
+
+function normalizePersonTag(rawTag) {
+  if (typeof rawTag !== 'string') return null;
+  const stripped = rawTag.trim().replace(/^#/, '').trim();
+  if (!stripped || !TAG_CHARSET_PATTERN.test(stripped)) return null;
+  return stripped.toLowerCase();
+}
+
+const tagRegexCache = new Map();
+
+function getTagRegex(normalizedTag) {
+  let regex = tagRegexCache.get(normalizedTag);
+  if (!regex) {
+    regex = new RegExp(`(?<![\\w#])#${normalizedTag}(?![\\w#])`, 'i');
+    tagRegexCache.set(normalizedTag, regex);
+  }
+  return regex;
+}
+
+function findTaggedPersonKeys(event, peopleConfig) {
+  const people = Array.isArray(peopleConfig) ? peopleConfig : [];
+  if (!event || people.length === 0) return new Set();
+
+  const haystacks = [event.summary, event.description].filter((value) => typeof value === 'string');
+  const found = new Set();
+  people.forEach((person) => {
+    const tag = person?.tag;
+    if (!tag || found.has(tag)) return;
+    const regex = getTagRegex(tag);
+    if (haystacks.some((text) => regex.test(text))) found.add(tag);
+  });
+  return found;
+}
+
+function matchTaggedPeople(event, peopleConfig) {
+  const people = Array.isArray(peopleConfig) ? peopleConfig : [];
+  const foundTags = findTaggedPersonKeys(event, people);
+  if (foundTags.size === 0) return [];
+  return people.filter((person) => foundTags.has(person?.tag));
+}
+
+function getPersonColorForEvent(event, peopleConfig) {
+  const matches = matchTaggedPeople(event, peopleConfig);
+  return matches[0]?.color ?? null;
+}
+
+function addPersonTagToDescription(description, tag) {
+  const normalizedTag = normalizePersonTag(tag);
+  if (!normalizedTag) return description || '';
+  const base = typeof description === 'string' ? description : '';
+  if (getTagRegex(normalizedTag).test(base)) return base;
+  const trimmed = base.replace(/\s+$/, '');
+  return trimmed ? `${trimmed}\n#${normalizedTag}` : `#${normalizedTag}`;
+}
+
+function removePersonTagFromDescription(description, tag) {
+  const normalizedTag = normalizePersonTag(tag);
+  const base = typeof description === 'string' ? description : '';
+  if (!normalizedTag) return base;
+  const ownLineRegex = new RegExp(`(?:^|\\n)[ \\t]*(?<![\\w#])#${normalizedTag}(?![\\w#])[ \\t]*(?=\\n|$)`, 'gi');
+  const inlineRegex = new RegExp(`[ \\t]*(?<![\\w#])#${normalizedTag}(?![\\w#])[ \\t]*`, 'gi');
+  return base
+    .replace(ownLineRegex, '')
+    .replace(inlineRegex, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/^[ \t]+|[ \t]+$/gm, '')
+    .trim();
+}
+
+function syncPersonTagsInDescription(description, { peopleConfig, checkedTagSet }) {
+  const people = Array.isArray(peopleConfig) ? peopleConfig : [];
+  const checked = checkedTagSet instanceof Set ? checkedTagSet : new Set(checkedTagSet || []);
+  let next = typeof description === 'string' ? description : '';
+  people.forEach((person) => {
+    const tag = person?.tag;
+    if (!tag) return;
+    next = checked.has(tag) ? addPersonTagToDescription(next, tag) : removePersonTagFromDescription(next, tag);
+  });
+  return next;
+}
+
+function normalizePeople(people, { normalizeSingleColor }) {
+  if (!Array.isArray(people)) return [];
+
+  const seenTags = new Set();
+  return people
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') return null;
+      const tag = normalizePersonTag(entry.tag);
+      if (!tag || seenTags.has(tag)) return null;
+      const color = normalizeSingleColor(entry.color);
+      if (!color) return null;
+      seenTags.add(tag);
+      return {
+        tag,
+        color,
+        name: typeof entry.name === 'string' && entry.name.trim() ? entry.name.trim() : tag,
+        person_entity: typeof entry.person_entity === 'string' && entry.person_entity.trim() ? entry.person_entity.trim() : null
+      };
+    })
+    .filter(Boolean);
 }
 
 console.info(`Daylight Calendar Card ${getDaylightCalendarCardVersion()} loaded from skylight-calendar-card.js`);
@@ -11356,6 +11796,7 @@ class SkylightCalendarCard extends HTMLElement {
       normalizeBackgroundOpacity: this.normalizeBackgroundOpacity.bind(this),
       normalizeEventModalSize: this.normalizeEventModalSize.bind(this),
       normalizeVirtualCalendars: this.normalizeVirtualCalendars.bind(this),
+      normalizePeople: this.normalizePeople.bind(this),
       normalizeDefaultDarkMode: this.normalizeDefaultDarkMode.bind(this),
       getDefaultTitle: (language) => translate(language, 'defaultTitle')
     });
@@ -12270,6 +12711,12 @@ class SkylightCalendarCard extends HTMLElement {
 
   normalizeVirtualCalendars(virtualCalendars) {
     return normalizeVirtualCalendars(virtualCalendars, {
+      normalizeSingleColor: this.normalizeSingleColor.bind(this)
+    });
+  }
+
+  normalizePeople(people) {
+    return normalizePeople(people, {
       normalizeSingleColor: this.normalizeSingleColor.bind(this)
     });
   }
@@ -15427,13 +15874,55 @@ class SkylightCalendarCard extends HTMLElement {
     return rawColor ? this.normalizeSingleColor(rawColor) : null;
   }
 
+  getPersonTagColor(event) {
+    return getPersonColorForEvent(event, this._config?.people || []);
+  }
+
+  // All matched people's colors, in config-declared order - used for multi-person striping.
+  // getPersonTagColor (singular, first-match) stays as-is for getExplicitCardColor/Google
+  // write-back, which isn't changed by striping (see v2 plan: Google can't render a stripe).
+  getPersonTagColors(event) {
+    return matchTaggedPeople(event, this._config?.people || []).map((person) => person.color);
+  }
+
   getEffectiveEventColor(event, styleCandidates = null, { virtualColor = null } = {}) {
     return this.getCustomEventColor(event)
       || styleCandidates?.background_color?.value
+      || this.getPersonTagColor(event)
       || this.getGoogleSourceEventColor(event)
       || virtualColor
       || event?.color
       || null;
+  }
+
+  // Only the tiers where this card itself made an event-specific color decision - excludes
+  // color_source_entity/virtualColor/the static per-calendar default, which aren't decisions
+  // about this particular event and shouldn't get pushed back to Google.
+  getExplicitCardColor(event) {
+    if (!event) return null;
+    const candidates = this.getSingleEventStyleCandidates(event);
+    return this.getCustomEventColor(event)
+      || candidates?.background_color?.value
+      || this.getPersonTagColor(event)
+      || null;
+  }
+
+  async pushExplicitColorToGoogle(event) {
+    if (!this._config?.google_color_write_back || !this._config?.color_source_entity) return;
+    const color = this.getExplicitCardColor(event);
+    if (!color) return;
+    const uid = event?.uid || event?.ical_uid || event?.iCalUID;
+    const recurrenceId = event?.recurrence_id;
+    if (!uid && !recurrenceId) return;
+    try {
+      await this._hass.callService('google_calendar_colors', 'set_event_color', {
+        uid: uid || undefined,
+        recurrence_id: recurrenceId || undefined,
+        color
+      });
+    } catch (error) {
+      console.warn('Failed to push event color back to Google Calendar:', error);
+    }
   }
 
   getEventAccentColor(event) {
@@ -15541,8 +16030,10 @@ class SkylightCalendarCard extends HTMLElement {
         return { sourceEvent, sourceIndex, candidates, customColor, virtualColor };
       });
 
-      const hasExplicitBackgroundColor = sourceCandidates.some(({ candidates, customColor }) =>
-        !!customColor || (candidates.background_color?.value !== undefined && candidates.background_color?.value !== null && candidates.background_color?.value !== '')
+      const hasExplicitBackgroundColor = sourceCandidates.some(({ sourceEvent, candidates, customColor }) =>
+        !!customColor
+        || (candidates.background_color?.value !== undefined && candidates.background_color?.value !== null && candidates.background_color?.value !== '')
+        || !!this.getPersonTagColor(sourceEvent)
       );
       const backgroundColors = sourceCandidates.map(({ sourceEvent, candidates, virtualColor }) => this.getEffectiveEventColor(sourceEvent, candidates, { virtualColor }));
       const uniqueBackgroundCount = new Set(backgroundColors).size;
@@ -15583,9 +16074,16 @@ class SkylightCalendarCard extends HTMLElement {
     if (customColor) {
       overrides.background_color = customColor;
     }
-    overrides.backgroundColors = [this.getEffectiveEventColor(event, candidates)];
+    // 2+ tagged people take priority over everything else (including a local custom paint
+    // or a matched event_styles rule) and render as a stripe - see the v2 person-striping
+    // plan. This only affects HA-side rendering; getExplicitCardColor (Google write-back)
+    // is unchanged and still resolves a single color for this same event.
+    const personColors = this.getPersonTagColors(event);
+    overrides.backgroundColors = personColors.length > 1
+      ? personColors
+      : [this.getEffectiveEventColor(event, candidates)];
     overrides.hasDuplicateBackgroundColors = false;
-    overrides.hasExplicitBackgroundColor = !!customColor || Object.prototype.hasOwnProperty.call(overrides, 'background_color');
+    overrides.hasExplicitBackgroundColor = !!customColor || !!this.getPersonTagColor(event) || Object.prototype.hasOwnProperty.call(overrides, 'background_color');
     return overrides;
   }
 
@@ -16546,6 +17044,8 @@ class SkylightCalendarCard extends HTMLElement {
       isPrefilledAllDay,
       recurrenceEndMode: this.getRecurrenceEndMode(recurrenceData),
       recurrenceWeekdayOptions: this.getRecurrenceWeekdayOptions(),
+      people: this._config.people || [],
+      checkedTagKeys: new Set(matchTaggedPeople(prefill, this._config.people || []).map((person) => person.tag)),
       helpers: {
         escapeHtml: (value) => this.escapeHtml(value),
         escapeHtmlAttribute: (value) => this.escapeHtmlAttribute(value),
@@ -16618,7 +17118,9 @@ class SkylightCalendarCard extends HTMLElement {
       const title = this.getRootElementById('event-title').value.trim();
       const isAllDay = this.getRootElementById('event-all-day').checked;
       const location = this.getRootElementById('event-location').value.trim();
-      const description = this.getRootElementById('event-description').value.trim();
+      const rawDescription = this.getRootElementById('event-description').value.trim();
+      const checkedTagSet = new Set(Array.from(this._root.querySelectorAll('.event-person-tag:checked')).map((el) => el.value));
+      const description = syncPersonTagsInDescription(rawDescription, { peopleConfig: this._config.people || [], checkedTagSet });
 
       if (selectedCalendarIds.length === 0) {
         this.showFormError(errorDiv, this.t('noWritableCalendars'));
@@ -16743,6 +17245,8 @@ class SkylightCalendarCard extends HTMLElement {
       recurringSelectedByDefault,
       recurrenceEndMode: this.getRecurrenceEndMode(recurrenceData),
       recurrenceWeekdayOptions: this.getRecurrenceWeekdayOptions(),
+      people: this._config.people || [],
+      checkedTagKeys: new Set(matchTaggedPeople(event, this._config.people || []).map((person) => person.tag)),
       helpers: {
         escapeHtml: (value) => this.escapeHtml(value),
         escapeHtmlAttribute: (value) => this.escapeHtmlAttribute(value),
@@ -16814,7 +17318,9 @@ class SkylightCalendarCard extends HTMLElement {
       const title = this.getRootElementById('event-title').value.trim();
       const isAllDayChecked = this.getRootElementById('event-all-day').checked;
       const location = this.getRootElementById('event-location').value.trim();
-      const description = this.getRootElementById('event-description').value.trim();
+      const rawDescription = this.getRootElementById('event-description').value.trim();
+      const checkedTagSet = new Set(Array.from(this._root.querySelectorAll('.event-person-tag:checked')).map((el) => el.value));
+      const description = syncPersonTagsInDescription(rawDescription, { peopleConfig: this._config.people || [], checkedTagSet });
 
       const formResult = normalizeEventFormData({
         title,
@@ -16884,7 +17390,33 @@ class SkylightCalendarCard extends HTMLElement {
 
         for (const targetEvent of editTargets) {
           const targetCalendarId = (editTargets.length > 1) ? targetEvent.entityId : calendarId;
-          await this.updateEvent(targetEvent, targetCalendarId, eventData, editScope);
+          const updateResult = await this.updateEvent(targetEvent, targetCalendarId, eventData, editScope);
+
+          // Uses the just-submitted title/description (not the stale pre-edit targetEvent),
+          // since a person tag may have been added/removed in this very save.
+          let colorTargetEvent = { ...targetEvent, summary: title, description };
+
+          if (updateResult?.recreated) {
+            // Some calendars have no in-place update mechanism at all, so updateEvent()
+            // fell back to create+delete - the original uid/recurrence_id now point at a
+            // deleted event. Refresh and find the newly created event by content match
+            // before pushing a color, or we'd color the event that's already gone.
+            //
+            // Content (title/time/location) is often unchanged by the edit (e.g. only the
+            // description/person tag changed), so the deleted original can still satisfy
+            // the same match key for a brief window if this refresh lands before the
+            // delete has propagated - explicitly exclude the known old uid so a stale
+            // re-read of the deleted event can never be mistaken for the new one.
+            await this.updateEvents({ preserveScroll: this._viewMode === 'agenda' });
+            const recreatedEvent = (this._events || []).find((candidate) => (
+              candidate.entityId === updateResult.calendarId
+              && candidate.uid !== targetEvent.uid
+              && this.getEventExactMatchKey(candidate) === updateResult.matchKey
+            ));
+            colorTargetEvent = recreatedEvent ? { ...recreatedEvent, description } : null;
+          }
+
+          if (colorTargetEvent) await this.pushExplicitColorToGoogle(colorTargetEvent);
         }
 
         this._combinedEditTargets = null;
@@ -16944,14 +17476,21 @@ class SkylightCalendarCard extends HTMLElement {
 
     const { isRecurringUpdate, recurrenceId, recurrenceRange } = getRecurringUpdateControls(originalEvent, eventData, editScope);
 
-    if (isRecurringUpdate && !movingCalendar && this._hass.connection?.sendMessagePromise) {
+    // Try the WebSocket API first for any in-place update, not just recurring ones - this
+    // mirrors deleteEvent(), which already does this unconditionally. Some Home Assistant
+    // versions/integrations don't register calendar.update_event as a domain service at all
+    // (only create_event/get_events), so gating this on isRecurringUpdate meant every
+    // non-recurring edit silently fell through to the destructive create+delete fallback
+    // below - discarding the original event's identity (and anything else Google-side that
+    // isn't tracked here, like a manually-set colorId) even though a real update was possible.
+    if (!movingCalendar && this._hass.connection?.sendMessagePromise) {
       const wsPayload = buildUpdateEventWebSocketPayload(originalEvent, eventData, recurrenceId, recurrenceRange);
 
       try {
         await this._hass.connection.sendMessagePromise(wsPayload);
-        return;
+        return { recreated: false };
       } catch (error) {
-        console.error('Recurring update via WebSocket failed, falling back:', error?.message || error);
+        console.error('Update via WebSocket failed, falling back:', error?.message || error);
       }
     }
 
@@ -16962,7 +17501,7 @@ class SkylightCalendarCard extends HTMLElement {
         const serviceData = buildUpdateEventServiceData(originalEvent, eventData, recurrenceId, recurrenceRange);
 
         await this._hass.callService('calendar', 'update_event', serviceData);
-        return;
+        return { recreated: false };
       } catch (error) {
         console.error('Update service failed, trying create+delete fallback:', error.message);
         // Fall through to create+delete pattern
@@ -16974,14 +17513,20 @@ class SkylightCalendarCard extends HTMLElement {
     }
 
     // Fallback: Create new event and then delete old one
-    // This prevents data loss when create fails on calendars without UPDATE support
-
+    // This prevents data loss when create fails on calendars without UPDATE support.
+    // Because this discards the original event's identity (some calendars/integrations
+    // genuinely have no update mechanism at all, not even via WebSocket), callers that need
+    // to act on the same event afterward (e.g. pushing a color) must use the returned
+    // matchKey/calendarId to find the newly created event rather than assuming the
+    // original event's uid/recurrence_id still refers to anything live.
     try {
       // Create in destination calendar first (might be same or different)
       await this.createEvent(newCalendarId, eventData);
 
       // Delete from original calendar only after successful create
       await this.deleteEvent(originalEvent.entityId, originalEvent.uid, recurrenceId, recurrenceRange);
+
+      return { recreated: true, matchKey: this.getEventExactMatchKey(eventData), calendarId: newCalendarId };
     } catch (error) {
       console.error('Create+Delete fallback failed:', error);
       throw new Error(error.message || this.t('updateEventServiceError'));
@@ -17579,6 +18124,9 @@ class SkylightCalendarCard extends HTMLElement {
           name: this.getCalendarName(calendar.entityId)
         };
       });
+    // Resolves against the merged/base event rather than per-source; a tag (or custom color,
+    // or color_source_entity match) on a non-primary source event won't be reflected here.
+    // Pre-existing limitation shared by all fallback tiers, not specific to person tags.
     const modalBadgeColor = this.getEffectiveEventColor(event) || event.color;
 
     // For edit/delete to work, we need:
@@ -17789,6 +18337,9 @@ class SkylightCalendarCard extends HTMLElement {
       if (!normalized) return;
       this._customEventColors = applyCustomEventColor(this._customEventColors, targetEvent, selectedScope(), normalized, { getEventIdentityKey: this.getEventIdentityKey.bind(this) });
       this.persistPreferences();
+      // Fire-and-forget: pushExplicitColorToGoogle handles its own errors and shouldn't
+      // block this already-instant local paint action.
+      this.pushExplicitColorToGoogle(targetEvent);
       this.render();
       this.showEventModal(returnEvent, onCloseBack, { onSaved });
     });

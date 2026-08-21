@@ -385,6 +385,9 @@ export class SkylightCalendarCardEditor extends HTMLElement {
     if (field === 'virtual_calendar_color') {
       return this.getEditorVirtualCalendarColor(Number(mapKey));
     }
+    if (field === 'person_color') {
+      return this.getEditorPersonColor(Number(mapKey));
+    }
     if (mapKey) {
       return this.getEditorMapColorValue(field, mapKey);
     }
@@ -402,12 +405,28 @@ export class SkylightCalendarCardEditor extends HTMLElement {
     );
   }
 
+  getInUseColorsForPicker() {
+    const rawValues = [
+      ...Object.values(this._config.colors || {}),
+      ...Object.values(this._config.event_font_colors || {}),
+      ...(this._config.people || []).map((person) => person?.color),
+      ...(this._config.virtual_calendars || []).map((virtualCalendar) => virtualCalendar?.color),
+      this._config.header_color,
+      this._config.header_text_color,
+      this._config.event_neutral_background
+    ];
+    return Array.from(new Set(rawValues.map((value) => this.normalizeHexColor(value)).filter(Boolean)));
+  }
+
   openColorPicker(field, mapKey = null) {
     const initialColor = this.getColorValue(field, mapKey);
     this._colorPickerState = { field, mapKey, color: initialColor };
     const dialog = this.querySelector('.color-picker-dialog');
     const picker = this.querySelector('daylight-color-picker');
-    if (picker) picker.value = initialColor;
+    if (picker) {
+      picker.inUseColors = this.getInUseColorsForPicker();
+      picker.value = initialColor;
+    }
     if (dialog) dialog.classList.add('show');
   }
 
@@ -424,6 +443,12 @@ export class SkylightCalendarCardEditor extends HTMLElement {
 
     if (field === 'virtual_calendar_color') {
       this.updateVirtualCalendar(Number(mapKey), { color: selectedColor }, { render: true });
+      this.closeColorPicker();
+      return;
+    }
+
+    if (field === 'person_color') {
+      this.updatePerson(Number(mapKey), { color: selectedColor }, { render: true });
       this.closeColorPicker();
       return;
     }
@@ -741,6 +766,205 @@ export class SkylightCalendarCardEditor extends HTMLElement {
       .map((input) => input.value)
       .filter((entityId) => typeof entityId === 'string' && entityId.startsWith('calendar.'));
     this.updateVirtualCalendar(index, { entities: checkedEntities });
+  }
+
+  getPeopleForEditor() {
+    return Array.isArray(this._config.people) ? this._config.people : [];
+  }
+
+  getRenderablePeopleForEditor() {
+    return this.getPeopleForEditor()
+      .map((person, index) => ({ person, index }))
+      .filter(({ person }) => person && typeof person === 'object' && !Array.isArray(person));
+  }
+
+  sanitizePersonForEditor(person) {
+    const nextPerson = {
+      ...(person && typeof person === 'object' ? person : {})
+    };
+
+    nextPerson.tag = String(nextPerson.tag || '').trim().replace(/^#/, '');
+    nextPerson.name = String(nextPerson.name || '').trim();
+
+    const color = String(nextPerson.color || '').trim();
+    nextPerson.color = color || null;
+
+    const personEntity = String(nextPerson.person_entity || '').trim();
+    nextPerson.person_entity = personEntity || null;
+
+    return nextPerson;
+  }
+
+  getPersonTagValidation(index) {
+    const people = this.getPeopleForEditor();
+    const person = people[index];
+    if (!person || typeof person !== 'object') return '';
+
+    const tag = String(person.tag || '').trim().replace(/^#/, '');
+    if (!tag) return 'Tag is required for matching events.';
+    if (!/^[A-Za-z0-9_]+$/.test(tag)) return 'Tag may only contain letters, numbers, and underscores.';
+
+    const duplicateIndex = people.findIndex((otherPerson, otherIndex) => (
+      otherIndex !== index &&
+      otherPerson &&
+      typeof otherPerson === 'object' &&
+      String(otherPerson.tag || '').trim().replace(/^#/, '').toLowerCase() === tag.toLowerCase()
+    ));
+
+    return duplicateIndex === -1 ? '' : 'Tag duplicates another person.';
+  }
+
+  getEditorPersonColor(index) {
+    const person = this.getPeopleForEditor()[index];
+    return this.toColorInputValue(person?.color);
+  }
+
+  renderPeopleEditor() {
+    const renderablePeople = this.getRenderablePeopleForEditor();
+
+    return `
+      <div class="people-editor">
+        <p class="helper">Link a color to a person. Tag an event with <code>#tag</code> (in the title or description) from either Home Assistant or Google Calendar to color it that person's color. Multiple people can be tagged on one event.</p>
+        ${renderablePeople.length ? renderablePeople
+          .map(({ person, index }, renderIndex) => this.renderPersonRow(person, index, renderIndex, renderablePeople.length))
+          .join('') : '<p class="helper">No people configured yet.</p>'}
+        <button type="button" class="secondary-action" data-person-action="add">Add person</button>
+      </div>
+    `;
+  }
+
+  renderPersonRow(person, index, renderIndex = index, renderCount = this.getRenderablePeopleForEditor().length) {
+    const personName = String(person.name || '').trim();
+    const personTag = String(person.tag || '').trim().replace(/^#/, '');
+    const personColor = String(person.color || '').trim();
+    const personEntity = String(person.person_entity || '').trim();
+    const tagValidation = this.getPersonTagValidation(index);
+    const tagValidationMarkup = tagValidation
+      ? `<p class="validation-message" id="person-tag-error-${index}">${this.escapeHtml(tagValidation)}</p>`
+      : '';
+    const colorStatusMarkup = personColor
+      ? `<span class="virtual-calendar-color-status">Color: ${this.escapeHtml(personColor)}</span>`
+      : '<span class="virtual-calendar-color-status no-override">No color set</span>';
+
+    return `
+      <div class="virtual-calendar-card" data-person-card="${index}">
+        <div class="virtual-calendar-card-header">
+          <strong>${this.escapeHtml(personName || (personTag ? `#${personTag}` : `Person ${renderIndex + 1}`))}</strong>
+          <div class="virtual-calendar-actions">
+            <button type="button" title="Move up" data-person-action="move-up" data-person-index="${index}" ${renderIndex === 0 ? 'disabled' : ''}>↑</button>
+            <button type="button" title="Move down" data-person-action="move-down" data-person-index="${index}" ${renderIndex === renderCount - 1 ? 'disabled' : ''}>↓</button>
+            <button type="button" title="Remove" data-person-action="remove" data-person-index="${index}">Remove</button>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="person-name-${index}">Name</label>
+            <input id="person-name-${index}" type="text" data-person-field="name" data-person-index="${index}" value="${this.escapeHtml(personName)}" placeholder="Soraya">
+          </div>
+          <div class="field">
+            <label for="person-tag-${index}">Tag</label>
+            <input id="person-tag-${index}" type="text" data-person-field="tag" data-person-index="${index}" value="${this.escapeHtml(personTag)}" placeholder="soraya" ${tagValidation ? 'aria-invalid="true"' : ''} ${tagValidation ? `aria-describedby="person-tag-error-${index}"` : ''}>
+            ${tagValidationMarkup}
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field virtual-calendar-color-field">
+            <label for="person-color-${index}">Color</label>
+            <div class="virtual-calendar-color-row">
+              ${this.renderColorInputControl({ id: `person-color-picker-${index}`, field: 'person_color', mapKey: String(index), value: personColor })}
+              <input id="person-color-${index}" type="text" data-person-field="color" data-person-index="${index}" value="${this.escapeHtml(personColor)}" placeholder="#e91e63">
+              ${colorStatusMarkup}
+            </div>
+          </div>
+          <div class="field">
+            <label for="person-entity-${index}">Linked person entity (optional)</label>
+            <input id="person-entity-${index}" type="text" data-person-field="person_entity" data-person-index="${index}" value="${this.escapeHtml(personEntity)}" placeholder="person.soraya">
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  updatePerson(index, patch, { render = false } = {}) {
+    const people = [...this.getPeopleForEditor()];
+    if (index < 0 || index >= people.length) return;
+    const currentPerson = people[index];
+    if (!currentPerson || typeof currentPerson !== 'object' || Array.isArray(currentPerson)) return;
+
+    people[index] = this.sanitizePersonForEditor({
+      ...currentPerson,
+      ...patch
+    });
+
+    this.emitConfigChanged({
+      ...this.value,
+      people
+    });
+
+    if (render) this.render();
+    else this.updateFieldValues();
+  }
+
+  addPerson() {
+    const people = [...this.getPeopleForEditor()];
+    people.push({
+      name: '',
+      tag: '',
+      color: null,
+      person_entity: null
+    });
+
+    this.emitConfigChanged({
+      ...this.value,
+      people
+    });
+    this.render();
+  }
+
+  removePerson(index) {
+    const people = [...this.getPeopleForEditor()];
+    if (index < 0 || index >= people.length) return;
+    people.splice(index, 1);
+
+    this.emitConfigChanged({
+      ...this.value,
+      people
+    });
+    this.render();
+  }
+
+  movePerson(index, direction) {
+    const renderablePeople = this.getRenderablePeopleForEditor();
+    const renderIndex = renderablePeople.findIndex((entry) => entry.index === index);
+    const swapEntry = renderablePeople[renderIndex + direction];
+    const people = [...this.getPeopleForEditor()];
+    if (renderIndex === -1 || !swapEntry || index < 0 || index >= people.length) return;
+    [people[index], people[swapEntry.index]] = [people[swapEntry.index], people[index]];
+
+    this.emitConfigChanged({
+      ...this.value,
+      people
+    });
+    this.render();
+  }
+
+  handlePersonAction(event) {
+    const action = event.currentTarget.dataset.personAction;
+    const index = Number(event.currentTarget.dataset.personIndex);
+    if (action === 'add') this.addPerson();
+    else if (action === 'remove') this.removePerson(index);
+    else if (action === 'move-up') this.movePerson(index, -1);
+    else if (action === 'move-down') this.movePerson(index, 1);
+  }
+
+  handlePersonInput(event) {
+    const index = Number(event.target.dataset.personIndex);
+    const field = event.target.dataset.personField;
+    if (!field) return;
+    const value = String(event.target.value || '').trim();
+    this.updatePerson(index, {
+      [field]: field === 'color' || field === 'person_entity' ? (value || null) : value
+    }, { render: field === 'tag' || field === 'name' || field === 'color' });
   }
 
   renderWeekdayCheckboxes() {
@@ -1073,6 +1297,7 @@ export class SkylightCalendarCardEditor extends HTMLElement {
       ${this.renderSubSection('Hide header badges for calendars', `<div class="list-checkbox-grid">${this.renderCalendarListCheckboxes('hide_badge_calendars', { label: 'hidden header badges calendars' })}</div>`)}
       ${this.renderSubSection('Calendars hidden by default', `<div class="list-checkbox-grid">${this.renderCalendarListCheckboxes('default_hidden_calendars', { label: 'calendars hidden by default' })}</div>`)}
       ${this.renderSubSection('Virtual calendars', this.renderVirtualCalendarsEditor())}
+      ${this.renderSubSection('People', this.renderPeopleEditor())}
     `);
 
     const localeSection = this.renderSection('Localization & preferences', `
@@ -1105,6 +1330,10 @@ export class SkylightCalendarCardEditor extends HTMLElement {
           <label for="color_source_entity">Event color source entity</label>
           <input id="color_source_entity" data-field="color_source_entity" type="text" value="${this._config.color_source_entity || ''}" placeholder="sensor.google_calendar_event_colors">
         </div>
+      </div>
+      <div class="field-row">
+        <label><input type="checkbox" data-field="google_color_write_back" ${this._config.google_color_write_back ? 'checked' : ''}> Push custom/style/person-tag colors back to Google Calendar</label>
+        <p class="helper">Requires a write-capable <code>google_calendar_colors</code> integration version and Google account re-authentication. Only pushes colors this card explicitly decided (a custom event color, an <code>event_styles</code> rule, or a person tag) - it never touches events with no explicit card-level color.</p>
       </div>
       <div class="field field-inline">
         <label for="preference_storage_key">Preference storage key</label>
@@ -1536,6 +1765,14 @@ export class SkylightCalendarCardEditor extends HTMLElement {
 
     this.querySelectorAll('[data-virtual-calendar-entity]').forEach((input) => {
       input.addEventListener('change', (event) => this.handleVirtualCalendarEntityChange(event));
+    });
+
+    this.querySelectorAll('[data-person-action]').forEach((button) => {
+      button.addEventListener('click', (event) => this.handlePersonAction(event));
+    });
+
+    this.querySelectorAll('[data-person-field]').forEach((input) => {
+      input.addEventListener('change', (event) => this.handlePersonInput(event));
     });
 
     this.querySelectorAll('[data-color-trigger]').forEach((trigger) => {

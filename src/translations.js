@@ -60,6 +60,7 @@ export const TRANSLATIONS = {
       copyAddress: 'Copy address',
       description: 'Description',
       descriptionPlaceholder: 'Event details...',
+      people: 'People',
       cancel: 'Cancel',
       createEvent: 'Create Event',
       creating: 'Creating...',

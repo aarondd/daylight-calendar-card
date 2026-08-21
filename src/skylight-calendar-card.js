@@ -232,6 +232,8 @@ import {
   getWritableCalendars as getWritableCalendarsHelper,
   normalizeVirtualCalendars as normalizeVirtualCalendarsHelper
 } from './calendars/calendar-entities.js';
+import { normalizePeople as normalizePeopleHelper } from './people/people-config.js';
+import { matchTaggedPeople, getPersonColorForEvent, syncPersonTagsInDescription } from './events/person-tags.js';
 
 console.info(`Daylight Calendar Card ${getDaylightCalendarCardVersion()} loaded from skylight-calendar-card.js`);
 
@@ -887,6 +889,7 @@ class SkylightCalendarCard extends HTMLElement {
       normalizeBackgroundOpacity: this.normalizeBackgroundOpacity.bind(this),
       normalizeEventModalSize: this.normalizeEventModalSize.bind(this),
       normalizeVirtualCalendars: this.normalizeVirtualCalendars.bind(this),
+      normalizePeople: this.normalizePeople.bind(this),
       normalizeDefaultDarkMode: this.normalizeDefaultDarkMode.bind(this),
       getDefaultTitle: (language) => translate(language, 'defaultTitle')
     });
@@ -1801,6 +1804,12 @@ class SkylightCalendarCard extends HTMLElement {
 
   normalizeVirtualCalendars(virtualCalendars) {
     return normalizeVirtualCalendarsHelper(virtualCalendars, {
+      normalizeSingleColor: this.normalizeSingleColor.bind(this)
+    });
+  }
+
+  normalizePeople(people) {
+    return normalizePeopleHelper(people, {
       normalizeSingleColor: this.normalizeSingleColor.bind(this)
     });
   }
@@ -4958,13 +4967,55 @@ class SkylightCalendarCard extends HTMLElement {
     return rawColor ? this.normalizeSingleColor(rawColor) : null;
   }
 
+  getPersonTagColor(event) {
+    return getPersonColorForEvent(event, this._config?.people || []);
+  }
+
+  // All matched people's colors, in config-declared order - used for multi-person striping.
+  // getPersonTagColor (singular, first-match) stays as-is for getExplicitCardColor/Google
+  // write-back, which isn't changed by striping (see v2 plan: Google can't render a stripe).
+  getPersonTagColors(event) {
+    return matchTaggedPeople(event, this._config?.people || []).map((person) => person.color);
+  }
+
   getEffectiveEventColor(event, styleCandidates = null, { virtualColor = null } = {}) {
     return this.getCustomEventColor(event)
       || styleCandidates?.background_color?.value
+      || this.getPersonTagColor(event)
       || this.getGoogleSourceEventColor(event)
       || virtualColor
       || event?.color
       || null;
+  }
+
+  // Only the tiers where this card itself made an event-specific color decision - excludes
+  // color_source_entity/virtualColor/the static per-calendar default, which aren't decisions
+  // about this particular event and shouldn't get pushed back to Google.
+  getExplicitCardColor(event) {
+    if (!event) return null;
+    const candidates = this.getSingleEventStyleCandidates(event);
+    return this.getCustomEventColor(event)
+      || candidates?.background_color?.value
+      || this.getPersonTagColor(event)
+      || null;
+  }
+
+  async pushExplicitColorToGoogle(event) {
+    if (!this._config?.google_color_write_back || !this._config?.color_source_entity) return;
+    const color = this.getExplicitCardColor(event);
+    if (!color) return;
+    const uid = event?.uid || event?.ical_uid || event?.iCalUID;
+    const recurrenceId = event?.recurrence_id;
+    if (!uid && !recurrenceId) return;
+    try {
+      await this._hass.callService('google_calendar_colors', 'set_event_color', {
+        uid: uid || undefined,
+        recurrence_id: recurrenceId || undefined,
+        color
+      });
+    } catch (error) {
+      console.warn('Failed to push event color back to Google Calendar:', error);
+    }
   }
 
   getEventAccentColor(event) {
@@ -5072,8 +5123,10 @@ class SkylightCalendarCard extends HTMLElement {
         return { sourceEvent, sourceIndex, candidates, customColor, virtualColor };
       });
 
-      const hasExplicitBackgroundColor = sourceCandidates.some(({ candidates, customColor }) =>
-        !!customColor || (candidates.background_color?.value !== undefined && candidates.background_color?.value !== null && candidates.background_color?.value !== '')
+      const hasExplicitBackgroundColor = sourceCandidates.some(({ sourceEvent, candidates, customColor }) =>
+        !!customColor
+        || (candidates.background_color?.value !== undefined && candidates.background_color?.value !== null && candidates.background_color?.value !== '')
+        || !!this.getPersonTagColor(sourceEvent)
       );
       const backgroundColors = sourceCandidates.map(({ sourceEvent, candidates, virtualColor }) => this.getEffectiveEventColor(sourceEvent, candidates, { virtualColor }));
       const uniqueBackgroundCount = new Set(backgroundColors).size;
@@ -5114,9 +5167,16 @@ class SkylightCalendarCard extends HTMLElement {
     if (customColor) {
       overrides.background_color = customColor;
     }
-    overrides.backgroundColors = [this.getEffectiveEventColor(event, candidates)];
+    // 2+ tagged people take priority over everything else (including a local custom paint
+    // or a matched event_styles rule) and render as a stripe - see the v2 person-striping
+    // plan. This only affects HA-side rendering; getExplicitCardColor (Google write-back)
+    // is unchanged and still resolves a single color for this same event.
+    const personColors = this.getPersonTagColors(event);
+    overrides.backgroundColors = personColors.length > 1
+      ? personColors
+      : [this.getEffectiveEventColor(event, candidates)];
     overrides.hasDuplicateBackgroundColors = false;
-    overrides.hasExplicitBackgroundColor = !!customColor || Object.prototype.hasOwnProperty.call(overrides, 'background_color');
+    overrides.hasExplicitBackgroundColor = !!customColor || !!this.getPersonTagColor(event) || Object.prototype.hasOwnProperty.call(overrides, 'background_color');
     return overrides;
   }
 
@@ -6077,6 +6137,8 @@ class SkylightCalendarCard extends HTMLElement {
       isPrefilledAllDay,
       recurrenceEndMode: this.getRecurrenceEndMode(recurrenceData),
       recurrenceWeekdayOptions: this.getRecurrenceWeekdayOptions(),
+      people: this._config.people || [],
+      checkedTagKeys: new Set(matchTaggedPeople(prefill, this._config.people || []).map((person) => person.tag)),
       helpers: {
         escapeHtml: (value) => this.escapeHtml(value),
         escapeHtmlAttribute: (value) => this.escapeHtmlAttribute(value),
@@ -6149,7 +6211,9 @@ class SkylightCalendarCard extends HTMLElement {
       const title = this.getRootElementById('event-title').value.trim();
       const isAllDay = this.getRootElementById('event-all-day').checked;
       const location = this.getRootElementById('event-location').value.trim();
-      const description = this.getRootElementById('event-description').value.trim();
+      const rawDescription = this.getRootElementById('event-description').value.trim();
+      const checkedTagSet = new Set(Array.from(this._root.querySelectorAll('.event-person-tag:checked')).map((el) => el.value));
+      const description = syncPersonTagsInDescription(rawDescription, { peopleConfig: this._config.people || [], checkedTagSet });
 
       if (selectedCalendarIds.length === 0) {
         this.showFormError(errorDiv, this.t('noWritableCalendars'));
@@ -6274,6 +6338,8 @@ class SkylightCalendarCard extends HTMLElement {
       recurringSelectedByDefault,
       recurrenceEndMode: this.getRecurrenceEndMode(recurrenceData),
       recurrenceWeekdayOptions: this.getRecurrenceWeekdayOptions(),
+      people: this._config.people || [],
+      checkedTagKeys: new Set(matchTaggedPeople(event, this._config.people || []).map((person) => person.tag)),
       helpers: {
         escapeHtml: (value) => this.escapeHtml(value),
         escapeHtmlAttribute: (value) => this.escapeHtmlAttribute(value),
@@ -6345,7 +6411,9 @@ class SkylightCalendarCard extends HTMLElement {
       const title = this.getRootElementById('event-title').value.trim();
       const isAllDayChecked = this.getRootElementById('event-all-day').checked;
       const location = this.getRootElementById('event-location').value.trim();
-      const description = this.getRootElementById('event-description').value.trim();
+      const rawDescription = this.getRootElementById('event-description').value.trim();
+      const checkedTagSet = new Set(Array.from(this._root.querySelectorAll('.event-person-tag:checked')).map((el) => el.value));
+      const description = syncPersonTagsInDescription(rawDescription, { peopleConfig: this._config.people || [], checkedTagSet });
 
       const formResult = normalizeEventFormData({
         title,
@@ -6415,7 +6483,33 @@ class SkylightCalendarCard extends HTMLElement {
 
         for (const targetEvent of editTargets) {
           const targetCalendarId = (editTargets.length > 1) ? targetEvent.entityId : calendarId;
-          await this.updateEvent(targetEvent, targetCalendarId, eventData, editScope);
+          const updateResult = await this.updateEvent(targetEvent, targetCalendarId, eventData, editScope);
+
+          // Uses the just-submitted title/description (not the stale pre-edit targetEvent),
+          // since a person tag may have been added/removed in this very save.
+          let colorTargetEvent = { ...targetEvent, summary: title, description };
+
+          if (updateResult?.recreated) {
+            // Some calendars have no in-place update mechanism at all, so updateEvent()
+            // fell back to create+delete - the original uid/recurrence_id now point at a
+            // deleted event. Refresh and find the newly created event by content match
+            // before pushing a color, or we'd color the event that's already gone.
+            //
+            // Content (title/time/location) is often unchanged by the edit (e.g. only the
+            // description/person tag changed), so the deleted original can still satisfy
+            // the same match key for a brief window if this refresh lands before the
+            // delete has propagated - explicitly exclude the known old uid so a stale
+            // re-read of the deleted event can never be mistaken for the new one.
+            await this.updateEvents({ preserveScroll: this._viewMode === 'agenda' });
+            const recreatedEvent = (this._events || []).find((candidate) => (
+              candidate.entityId === updateResult.calendarId
+              && candidate.uid !== targetEvent.uid
+              && this.getEventExactMatchKey(candidate) === updateResult.matchKey
+            ));
+            colorTargetEvent = recreatedEvent ? { ...recreatedEvent, description } : null;
+          }
+
+          if (colorTargetEvent) await this.pushExplicitColorToGoogle(colorTargetEvent);
         }
 
         this._combinedEditTargets = null;
@@ -6475,14 +6569,21 @@ class SkylightCalendarCard extends HTMLElement {
 
     const { isRecurringUpdate, recurrenceId, recurrenceRange } = getRecurringUpdateControls(originalEvent, eventData, editScope);
 
-    if (isRecurringUpdate && !movingCalendar && this._hass.connection?.sendMessagePromise) {
+    // Try the WebSocket API first for any in-place update, not just recurring ones - this
+    // mirrors deleteEvent(), which already does this unconditionally. Some Home Assistant
+    // versions/integrations don't register calendar.update_event as a domain service at all
+    // (only create_event/get_events), so gating this on isRecurringUpdate meant every
+    // non-recurring edit silently fell through to the destructive create+delete fallback
+    // below - discarding the original event's identity (and anything else Google-side that
+    // isn't tracked here, like a manually-set colorId) even though a real update was possible.
+    if (!movingCalendar && this._hass.connection?.sendMessagePromise) {
       const wsPayload = buildUpdateEventWebSocketPayload(originalEvent, eventData, recurrenceId, recurrenceRange);
 
       try {
         await this._hass.connection.sendMessagePromise(wsPayload);
-        return;
+        return { recreated: false };
       } catch (error) {
-        console.error('Recurring update via WebSocket failed, falling back:', error?.message || error);
+        console.error('Update via WebSocket failed, falling back:', error?.message || error);
       }
     }
 
@@ -6493,7 +6594,7 @@ class SkylightCalendarCard extends HTMLElement {
         const serviceData = buildUpdateEventServiceData(originalEvent, eventData, recurrenceId, recurrenceRange);
 
         await this._hass.callService('calendar', 'update_event', serviceData);
-        return;
+        return { recreated: false };
       } catch (error) {
         console.error('Update service failed, trying create+delete fallback:', error.message);
         // Fall through to create+delete pattern
@@ -6505,14 +6606,20 @@ class SkylightCalendarCard extends HTMLElement {
     }
 
     // Fallback: Create new event and then delete old one
-    // This prevents data loss when create fails on calendars without UPDATE support
-
+    // This prevents data loss when create fails on calendars without UPDATE support.
+    // Because this discards the original event's identity (some calendars/integrations
+    // genuinely have no update mechanism at all, not even via WebSocket), callers that need
+    // to act on the same event afterward (e.g. pushing a color) must use the returned
+    // matchKey/calendarId to find the newly created event rather than assuming the
+    // original event's uid/recurrence_id still refers to anything live.
     try {
       // Create in destination calendar first (might be same or different)
       await this.createEvent(newCalendarId, eventData);
 
       // Delete from original calendar only after successful create
       await this.deleteEvent(originalEvent.entityId, originalEvent.uid, recurrenceId, recurrenceRange);
+
+      return { recreated: true, matchKey: this.getEventExactMatchKey(eventData), calendarId: newCalendarId };
     } catch (error) {
       console.error('Create+Delete fallback failed:', error);
       throw new Error(error.message || this.t('updateEventServiceError'));
@@ -7110,6 +7217,9 @@ class SkylightCalendarCard extends HTMLElement {
           name: this.getCalendarName(calendar.entityId)
         };
       });
+    // Resolves against the merged/base event rather than per-source; a tag (or custom color,
+    // or color_source_entity match) on a non-primary source event won't be reflected here.
+    // Pre-existing limitation shared by all fallback tiers, not specific to person tags.
     const modalBadgeColor = this.getEffectiveEventColor(event) || event.color;
 
     // For edit/delete to work, we need:
@@ -7320,6 +7430,9 @@ class SkylightCalendarCard extends HTMLElement {
       if (!normalized) return;
       this._customEventColors = applyCustomEventColor(this._customEventColors, targetEvent, selectedScope(), normalized, { getEventIdentityKey: this.getEventIdentityKey.bind(this) });
       this.persistPreferences();
+      // Fire-and-forget: pushExplicitColorToGoogle handles its own errors and shouldn't
+      // block this already-instant local paint action.
+      this.pushExplicitColorToGoogle(targetEvent);
       this.render();
       this.showEventModal(returnEvent, onCloseBack, { onSaved });
     });
