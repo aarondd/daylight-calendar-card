@@ -2573,6 +2573,110 @@ test('month span layout excludes short timed overnight events', () => {
   assert.match(html, /event-time/);
 });
 
+function renderWeekCompactHtmlForWeek(card, weekStartDateKey = '2026-05-03') {
+  const weekStart = new Date(`${weekStartDateKey}T00:00:00`);
+  card._viewMode = 'week-compact';
+  card._weekStart = weekStart;
+  card._currentDate = new Date(weekStart);
+  return card.renderWeekCompact();
+}
+
+function countWeekCompactSpanSegments(html) {
+  return (html.match(/week-compact-span-event/g) || []).length;
+}
+
+function countWeekCompactSpanContinuations(html) {
+  return (html.match(/is-continuation/g) || []).length;
+}
+
+function countWeekCompactSpanSpacers(html) {
+  return (html.match(/week-compact-span-spacer/g) || []).length;
+}
+
+function getWeekCompactSpanClassForTitle(html, title) {
+  const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return html.match(new RegExp(`<div class="week-compact-event week-compact-span-event([^"]*)"[^>]*"summary":"${escapedTitle}"`))?.[1] || '';
+}
+
+test('week compact multi-day all-day events render as one continuous span across day columns', () => {
+  const card = makeCard({ entities: ['calendar.family'] });
+  card._events = [makeAllDayEvent('spring break', '2026-05-04', '2026-05-08')];
+  const html = renderWeekCompactHtmlForWeek(card);
+
+  // One segment per covered day (Mon-Thu); continuation segments keep the title in
+  // the DOM (hidden by CSS) so wrapped rows can reveal it and heights stay aligned.
+  assert.equal(countWeekCompactSpanSegments(html), 4);
+  assert.equal(countWeekCompactSpanContinuations(html), 3);
+  assert.equal((html.match(/>spring break</g) || []).length, 4);
+
+  const leadingClasses = getWeekCompactSpanClassForTitle(html, 'spring break');
+  assert.match(leadingClasses, /continues-next/);
+  assert.match(leadingClasses, /bridge-next/);
+  assert.doesNotMatch(leadingClasses, /continues-prev/);
+  assert.doesNotMatch(leadingClasses, /is-continuation/);
+
+  // Days outside the span reserve nothing — no trailing vertical placeholder.
+  assert.equal(countWeekCompactSpanSpacers(html), 0);
+});
+
+test('week compact spans clipped by the visible week keep continuation edges', () => {
+  const card = makeCard({ entities: ['calendar.family'] });
+  card._events = [makeAllDayEvent('long trip', '2026-05-01', '2026-05-12')];
+  const html = renderWeekCompactHtmlForWeek(card);
+  const leadingClasses = getWeekCompactSpanClassForTitle(html, 'long trip');
+
+  assert.equal(countWeekCompactSpanSegments(html), 7);
+  assert.equal(countWeekCompactSpanContinuations(html), 6);
+  assert.equal(countWeekCompactSpanSpacers(html), 0);
+  assert.match(leadingClasses, /continues-prev/);
+  assert.match(leadingClasses, /continues-next/);
+  assert.doesNotMatch(leadingClasses, /bridge-prev/);
+});
+
+test('week compact reserves an empty lane only when a later lane is still occupied', () => {
+  const card = makeCard({ entities: ['calendar.family'] });
+  card._events = [
+    makeAllDayEvent('early trip', '2026-05-04', '2026-05-06'),
+    makeAllDayEvent('overlapping trip', '2026-05-05', '2026-05-08')
+  ];
+  const html = renderWeekCompactHtmlForWeek(card);
+
+  // Wed/Thu have an empty first lane under the second-lane span, so those two keep a
+  // placeholder; Sun and Fri/Sat trail off the end and reserve nothing.
+  assert.equal(countWeekCompactSpanSpacers(html), 2);
+});
+
+test('week compact single-day all-day events keep their own bubble', () => {
+  const card = makeCard({ entities: ['calendar.family'] });
+  card._events = [makeAllDayEvent('holiday', '2026-05-05', '2026-05-06')];
+  const html = renderWeekCompactHtmlForWeek(card);
+
+  assert.equal(countWeekCompactSpanSegments(html), 0);
+  assert.equal(countWeekCompactSpanSpacers(html), 0);
+  assert.equal((html.match(/>holiday</g) || []).length, 1);
+});
+
+test('week compact span continuations drop the repeated left color indicator', () => {
+  const card = makeCard({ entities: ['calendar.family'], event_color_mode: 'left-tint' });
+  card._events = [makeAllDayEvent('tinted trip', '2026-05-04', '2026-05-06')];
+  const html = renderWeekCompactHtmlForWeek(card);
+
+  assert.equal(countWeekCompactSpanSegments(html), 2);
+  // Only the leading segment paints the left color bar; the continuation stays flat.
+  assert.equal((html.match(/week-compact-span-event[^>]*linear-gradient\(to right/g) || []).length, 1);
+  assert.equal((html.match(/is-continuation[^>]*--combine-left-offset: 0px/g) || []).length, 1);
+  assert.equal((html.match(/is-continuation[^>]*linear-gradient\(to right/g) || []).length, 0);
+});
+
+test('week compact keeps the empty-day placeholder when spans reserve lanes elsewhere', () => {
+  const card = makeCard({ entities: ['calendar.family'] });
+  card._events = [makeAllDayEvent('midweek trip', '2026-05-05', '2026-05-07')];
+  const html = renderWeekCompactHtmlForWeek(card);
+
+  assert.equal(countWeekCompactSpanSegments(html), 2);
+  assert.equal((html.match(/noEvents|No events/g) || []).length, 5);
+});
+
 test('checkAllCalendarCapabilities marks google, caldav, and local capabilities correctly', async () => {
   const card = makeCard({
     entities: ['calendar.google_home', 'calendar.caldav_work', 'calendar.local_family'],

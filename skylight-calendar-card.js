@@ -4335,9 +4335,12 @@ function getCardStyles() {
 
       /* Week Compact View Styles */
       .week-compact-container {
+        --week-compact-column-padding: 12px;
+        --week-compact-column-gap: 1px;
+        --week-compact-event-padding: 10px;
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-        gap: 1px;
+        gap: var(--week-compact-column-gap);
         background: #e5e7eb;
         border-top: 1px solid #e5e7eb;
         flex: 1 1 auto;
@@ -4347,7 +4350,7 @@ function getCardStyles() {
 
       .week-day-column {
         background: white;
-        padding: 16px 12px;
+        padding: 16px var(--week-compact-column-padding, 12px);
         min-height: 200px;
       }
 
@@ -4457,7 +4460,7 @@ function getCardStyles() {
         background: #3b82f6;
         color: var(--event-bubble-text-color, white);
         font-size: var(--event-bubble-font-size, 11px);
-        padding: 8px 10px 8px calc(10px + var(--combine-left-offset, 0px));
+        padding: 8px var(--week-compact-event-padding, 10px) 8px calc(var(--week-compact-event-padding, 10px) + var(--combine-left-offset, 0px));
         border-radius: 6px;
         margin-bottom: 8px;
         cursor: pointer;
@@ -4469,6 +4472,58 @@ function getCardStyles() {
       .week-compact-event:hover {
         transform: translateX(2px);
         box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      }
+
+      /* Multi-day all-day events render as one continuous bar across day columns */
+      .week-compact-span-event.continues-prev {
+        border-top-left-radius: 0;
+        border-bottom-left-radius: 0;
+      }
+
+      .week-compact-span-event.continues-next {
+        border-top-right-radius: 0;
+        border-bottom-right-radius: 0;
+      }
+
+      .week-compact-span-event.bridge-prev {
+        margin-left: calc(-1 * (var(--week-compact-column-padding) + var(--week-compact-column-gap)));
+        padding-left: calc(var(--week-compact-event-padding) + var(--week-compact-column-padding) + var(--week-compact-column-gap) + var(--combine-left-offset, 0px));
+      }
+
+      .week-compact-span-event.bridge-next {
+        margin-right: calc(-1 * var(--week-compact-column-padding));
+        padding-right: calc(var(--week-compact-event-padding) + var(--week-compact-column-padding));
+      }
+
+      .week-compact-span-event:hover {
+        transform: none;
+      }
+
+      .week-compact-span-event .week-compact-event-title {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .week-compact-span-event.is-continuation .week-compact-span-content,
+      .week-compact-span-event.is-continuation .event-style-icon,
+      .week-compact-span-event.is-continuation .combined-corner-bubbles {
+        visibility: hidden;
+      }
+
+      /* A continuation segment that starts a new wrapped row repeats the title */
+      .week-day-column.week-compact-row-start .week-compact-span-event.is-continuation .week-compact-span-content {
+        visibility: visible;
+      }
+
+      .week-day-column.week-compact-row-start .week-compact-span-event.bridge-prev {
+        margin-left: 0;
+        padding-left: calc(var(--week-compact-event-padding) + var(--combine-left-offset, 0px));
+      }
+
+      .week-compact-span-spacer {
+        visibility: hidden;
+        pointer-events: none;
       }
 
       .week-compact-event-time {
@@ -10658,6 +10713,12 @@ function renderWeekCompactView({
 }) {
   const headerHeightStyle = headerHeight ? `--week-compact-header-height: ${headerHeight}px;` : '';
   const containerStyle = `${headerHeightStyle}${helpers.getCompactContainerStyle()}`;
+  const spanLayout = helpers.getAllDaySpanLayoutForDays(weekDays);
+  const spannedEventKeys = new Set((spanLayout?.spans || []).map((span) => helpers.getEventKey(span.event)));
+  const laneOwnerEvents = [];
+  (spanLayout?.spans || []).forEach((span) => {
+    if (laneOwnerEvents[span.laneIndex] === undefined) laneOwnerEvents[span.laneIndex] = span.event;
+  });
 
   return `
       ${!config.compact_header && !config.hide_calendars ? helpers.renderCalendarBadges() : ''}
@@ -10665,7 +10726,11 @@ function renderWeekCompactView({
         ${weekDays.map(date => {
           const isToday = date.toDateString() === today.toDateString();
           const dayEventsForMatching = helpers.getEventsForDay(date, { includeHiddenStyledEvents: true });
-          const events = helpers.sortEventsForDate(dayEventsForMatching.filter((event) => !helpers.isEventHiddenByStyle(event)), date);
+          const events = helpers.sortEventsForDate(dayEventsForMatching.filter((event) => !helpers.isEventHiddenByStyle(event)), date)
+            .filter((event) => !spannedEventKeys.has(helpers.getEventKey(event)));
+          // Trailing empty lanes are dropped so days after the last span don't carry
+          // reserved vertical space; interior gaps stay to keep later lanes aligned.
+          const spanLanes = helpers.trimTrailingNullSpanLanes(spanLayout?.dayLanesByDateKey.get(helpers.getDateKey(date)) || []);
           const dayStyle = helpers.getDayStyleAttributes(date, dayEventsForMatching, isToday);
           const dayStyleAttr = dayStyle.style ? ` style="${dayStyle.style}"` : '';
 
@@ -10682,10 +10747,11 @@ function renderWeekCompactView({
                 </div>
               </div>
               <div class="week-day-events">
+                ${spanLanes.map((lane, laneIndex) => helpers.renderWeekCompactSpanLane(lane, laneOwnerEvents[laneIndex])).join('')}
                 ${events.map(event => {
                   return helpers.renderWeekCompactEvent(event, date);
                 }).join('')}
-                ${events.length === 0 ? `<div style="color: #9ca3af; font-size: 13px; text-align: center; margin-top: 20px;">${helpers.t('noEvents')}</div>` : ''}
+                ${events.length === 0 && !spanLanes.some(Boolean) ? `<div style="color: #9ca3af; font-size: 13px; text-align: center; margin-top: 20px;">${helpers.t('noEvents')}</div>` : ''}
               </div>
             </div>
           `;
@@ -13916,6 +13982,23 @@ class SkylightCalendarCard extends HTMLElement {
 
 
 
+  updateWeekCompactSpanRowBoundariesFromDom() {
+    if (this._viewMode !== 'week-compact' || !this._root) return;
+
+    const dayColumns = Array.from(this._root.querySelectorAll('.week-compact-container .week-day-column'));
+    if (dayColumns.length === 0) return;
+
+    let previousColumnTop = null;
+    dayColumns.forEach((column) => {
+      const columnTop = Number.isFinite(column.offsetTop)
+        ? column.offsetTop
+        : Math.round(column.getBoundingClientRect?.().top || 0);
+      const startsNewRow = previousColumnTop === null || columnTop > previousColumnTop;
+      column.classList?.toggle('week-compact-row-start', startsNewRow);
+      previousColumnTop = columnTop;
+    });
+  }
+
   cancelMonthCompactMeasurement() {
     if (this._monthMeasureRaf !== null) {
       window.cancelAnimationFrame(this._monthMeasureRaf);
@@ -14026,6 +14109,7 @@ class SkylightCalendarCard extends HTMLElement {
       this.updateWeekStandardFixedOffsetHeightFromDom({ renderOnChange: false });
     } else if (this._viewMode === 'week-compact') {
       this.updateWeekCompactStackedHeaderHeightFromDom({ renderOnChange: false });
+      this.updateWeekCompactSpanRowBoundariesFromDom();
     }
   }
 
@@ -14442,6 +14526,7 @@ class SkylightCalendarCard extends HTMLElement {
     this.updateCalendarBadgesScrollState();
     this.updateWeekStandardFixedOffsetHeightFromDom();
     this.updateWeekCompactStackedHeaderHeightFromDom();
+    this.updateWeekCompactSpanRowBoundariesFromDom();
     this.observeHeaderResize();
     this.observeMonthGridResize();
     if (this._viewMode === 'month' && this._config.compact_height && !this.shouldShowAllEventsInMonth()) {
@@ -14712,6 +14797,11 @@ class SkylightCalendarCard extends HTMLElement {
         renderDayBadges: (date, events) => this.renderDayBadges(date, events),
         renderDayForecast: (date, viewMode) => this.renderDayForecast(date, viewMode),
         renderWeekCompactEvent: (event, date) => this.renderWeekCompactEvent(event, date),
+        renderWeekCompactSpanLane: (lane, laneEvent) => this.renderWeekCompactSpanLane(lane, laneEvent),
+        trimTrailingNullSpanLanes: (lanes) => this.trimTrailingNullMonthSpanLanes(lanes),
+        getAllDaySpanLayoutForDays: (days) => this.buildAllDaySpanLayoutForDays(days),
+        getDateKey: (date) => this.getDateKey(date),
+        getEventKey: (event) => this.getScheduleAllDayEventKey(event),
         t: (key, params) => this.t(key, params)
       }
     });
@@ -14894,7 +14984,11 @@ class SkylightCalendarCard extends HTMLElement {
   }
 
   buildMonthSpanLayoutForWeek(weekDays) {
-    return buildContinuousDaySpanLayout(weekDays, {
+    return this.buildAllDaySpanLayoutForDays(weekDays);
+  }
+
+  buildAllDaySpanLayoutForDays(days) {
+    return buildContinuousDaySpanLayout(days, {
       getDateKey: this.getDateKey.bind(this),
       getEventsForDay: (date) => this.sortEventsForDate(
         this.getEventsForDay(date, { includeHiddenStyledEvents: false }).filter((event) => !this.isEventHiddenByStyle(event)),
@@ -15699,6 +15793,56 @@ class SkylightCalendarCard extends HTMLElement {
     return this.renderEvent(event, date);
   }
 
+  getWeekCompactEventStyleVariables(event) {
+    return `--event-bubble-font-size: ${this.getEventBubbleFontSize(event)}; --event-time-font-size: ${this.getEventTimeFontSize(event)}; --event-location-font-size: ${this.getEventLocationFontSize(event)}; --event-bubble-text-color: ${this.getEventBubbleFontColor(event)};`;
+  }
+
+  renderWeekCompactSpanLane(lane, laneEvent = null) {
+    if (!lane) {
+      // Reserve the lane so events below stay aligned across day columns. The spacer
+      // mirrors the lane owner's bar markup so both are exactly the same height.
+      const spacerEvent = laneEvent || null;
+      return `
+      <div class="week-compact-event week-compact-span-spacer" style="${spacerEvent ? `${this.getEventStyle(spacerEvent)} ${this.getWeekCompactEventStyleVariables(spacerEvent)}` : ''}">
+        <div class="week-compact-span-content">
+          ${!spacerEvent || this.shouldShowEventTime(spacerEvent) ? `<div class="week-compact-event-time">&nbsp;</div>` : ''}
+          <div class="week-compact-event-title">&nbsp;</div>
+        </div>
+      </div>
+    `;
+    }
+
+    const {
+      event,
+      displayTitle,
+      continuesFromPreviousDay,
+      continuesToNextDay,
+      bridgeFromPreviousDay,
+      bridgeToNextDay,
+      isFirstVisibleSegment
+    } = lane;
+    const spanClasses = [
+      'week-compact-event',
+      'week-compact-span-event',
+      continuesFromPreviousDay ? 'continues-prev' : '',
+      continuesToNextDay ? 'continues-next' : '',
+      bridgeFromPreviousDay ? 'bridge-prev' : '',
+      bridgeToNextDay ? 'bridge-next' : '',
+      isFirstVisibleSegment ? '' : 'is-continuation'
+    ].filter(Boolean).join(' ');
+
+    return `
+      <div class="${spanClasses}" style="${this.getEventStyle(event, { suppressLeftIndicator: !isFirstVisibleSegment })} ${this.getWeekCompactEventStyleVariables(event)}" data-event='${JSON.stringify(event).replace(/'/g, "&#39;")}'>
+        <div class="week-compact-span-content">
+          ${this.shouldShowEventTime(event) ? `<div class="week-compact-event-time">${this.t('allDay')}</div>` : ''}
+          <div class="week-compact-event-title">${this.renderEventTitleWithPrefix(event, displayTitle || event.summary || this.t('untitledEvent'))}</div>
+        </div>
+        ${this.renderEventStyleCornerIcon(event)}
+        ${this.renderCombinedCornerBubbles(event)}
+      </div>
+    `;
+  }
+
   renderWeekCompactEvent(event, date) {
     const daySegment = this.getEventDaySegment(event, date);
     if (!daySegment) return '';
@@ -16194,7 +16338,7 @@ class SkylightCalendarCard extends HTMLElement {
     return visibleColors;
   }
 
-  getEventStyle(event, { withBorderAccent = false } = {}) {
+  getEventStyle(event, { withBorderAccent = false, suppressLeftIndicator = false } = {}) {
     const styleOverrides = this.getEventStyleOverrides(event);
     const virtualCalendar = this.getVirtualBadgeForEvent(event);
     const virtualColor = virtualCalendar
@@ -16235,12 +16379,14 @@ class SkylightCalendarCard extends HTMLElement {
     const eventColorMode = this.normalizeEventColorMode(this._config?.event_color_mode);
     if (visibleColors.length <= 1) {
       if (eventColorMode === 'left-neutral') {
-        const barWidth = this.getEventColorBarWidth();
-        return finalizeStyle(`--combine-left-offset: ${barWidth}px; background-color: ${this.getEventNeutralBackgroundColor()}; background-image: linear-gradient(to right, ${primaryColor} 0 ${barWidth}px, transparent ${barWidth}px); background-size: ${barWidth}px 100%; background-position: left top; background-repeat: no-repeat; background-clip: padding-box; ${borderStyle}`);
+        const barWidth = suppressLeftIndicator ? 0 : this.getEventColorBarWidth();
+        const barImage = suppressLeftIndicator ? 'none' : `linear-gradient(to right, ${primaryColor} 0 ${barWidth}px, transparent ${barWidth}px)`;
+        return finalizeStyle(`--combine-left-offset: ${barWidth}px; background-color: ${this.getEventNeutralBackgroundColor()}; background-image: ${barImage}; background-size: ${barWidth}px 100%; background-position: left top; background-repeat: no-repeat; background-clip: padding-box; ${borderStyle}`);
       }
       if (eventColorMode === 'left-tint') {
-        const barWidth = this.getEventColorBarWidth();
-        return finalizeStyle(`--combine-left-offset: ${barWidth}px; background-color: ${this.getEventTintBackgroundColor(primaryColor)}; background-image: linear-gradient(to right, ${primaryColor} 0 ${barWidth}px, transparent ${barWidth}px); background-size: ${barWidth}px 100%; background-position: left top; background-repeat: no-repeat; background-clip: padding-box; ${borderStyle}`);
+        const barWidth = suppressLeftIndicator ? 0 : this.getEventColorBarWidth();
+        const barImage = suppressLeftIndicator ? 'none' : `linear-gradient(to right, ${primaryColor} 0 ${barWidth}px, transparent ${barWidth}px)`;
+        return finalizeStyle(`--combine-left-offset: ${barWidth}px; background-color: ${this.getEventTintBackgroundColor(primaryColor)}; background-image: ${barImage}; background-size: ${barWidth}px 100%; background-position: left top; background-repeat: no-repeat; background-clip: padding-box; ${borderStyle}`);
       }
       return finalizeStyle(`background-color: ${primaryColor}; background-image: none; background-clip: padding-box; ${borderStyle}`);
     }
@@ -16255,14 +16401,14 @@ class SkylightCalendarCard extends HTMLElement {
     const shouldShowCornerBadges = !!styleOverrides?.hasDuplicateBackgroundColors;
 
     if (combineStyle === 'bars') {
-      const barsGradient = indicatorColors.length > 0 ? this.createVerticalBarsGradient(indicatorColors) : 'none';
-      const leftOffset = indicatorColors.length > 0 ? `--combine-left-offset: ${indicatorWidth}px;` : '--combine-left-offset: 0px;';
+      const barsGradient = indicatorColors.length > 0 && !suppressLeftIndicator ? this.createVerticalBarsGradient(indicatorColors) : 'none';
+      const leftOffset = indicatorColors.length > 0 && !suppressLeftIndicator ? `--combine-left-offset: ${indicatorWidth}px;` : '--combine-left-offset: 0px;';
       return finalizeStyle(`${leftOffset} background-color: ${backgroundColor}; background-image: ${barsGradient}; background-size: ${indicatorWidth}px 100%; background-position: left top; background-repeat: no-repeat; background-clip: padding-box; ${shouldShowCornerBadges ? '--combined-corner-bubbles: 1;' : ''} ${borderStyle}`);
     }
 
     if (combineStyle === 'dots') {
-      const dots = indicatorColors.length > 0 ? this.createDotsDecoration(indicatorColors, indicatorWidth) : 'none';
-      const leftOffset = indicatorColors.length > 0 ? `--combine-left-offset: ${indicatorWidth}px;` : '--combine-left-offset: 0px;';
+      const dots = indicatorColors.length > 0 && !suppressLeftIndicator ? this.createDotsDecoration(indicatorColors, indicatorWidth) : 'none';
+      const leftOffset = indicatorColors.length > 0 && !suppressLeftIndicator ? `--combine-left-offset: ${indicatorWidth}px;` : '--combine-left-offset: 0px;';
       return finalizeStyle(`${leftOffset} background-color: ${backgroundColor}; background-image: ${dots}; background-repeat: no-repeat; background-clip: padding-box; ${shouldShowCornerBadges ? '--combined-corner-bubbles: 1;' : ''} ${borderStyle}`);
     }
 

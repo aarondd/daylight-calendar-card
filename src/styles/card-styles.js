@@ -836,9 +836,12 @@ export function getCardStyles() {
 
       /* Week Compact View Styles */
       .week-compact-container {
+        --week-compact-column-padding: 12px;
+        --week-compact-column-gap: 1px;
+        --week-compact-event-padding: 10px;
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-        gap: 1px;
+        gap: var(--week-compact-column-gap);
         background: #e5e7eb;
         border-top: 1px solid #e5e7eb;
         flex: 1 1 auto;
@@ -848,7 +851,7 @@ export function getCardStyles() {
 
       .week-day-column {
         background: white;
-        padding: 16px 12px;
+        padding: 16px var(--week-compact-column-padding, 12px);
         min-height: 200px;
       }
 
@@ -958,7 +961,7 @@ export function getCardStyles() {
         background: #3b82f6;
         color: var(--event-bubble-text-color, white);
         font-size: var(--event-bubble-font-size, 11px);
-        padding: 8px 10px 8px calc(10px + var(--combine-left-offset, 0px));
+        padding: 8px var(--week-compact-event-padding, 10px) 8px calc(var(--week-compact-event-padding, 10px) + var(--combine-left-offset, 0px));
         border-radius: 6px;
         margin-bottom: 8px;
         cursor: pointer;
@@ -970,6 +973,58 @@ export function getCardStyles() {
       .week-compact-event:hover {
         transform: translateX(2px);
         box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      }
+
+      /* Multi-day all-day events render as one continuous bar across day columns */
+      .week-compact-span-event.continues-prev {
+        border-top-left-radius: 0;
+        border-bottom-left-radius: 0;
+      }
+
+      .week-compact-span-event.continues-next {
+        border-top-right-radius: 0;
+        border-bottom-right-radius: 0;
+      }
+
+      .week-compact-span-event.bridge-prev {
+        margin-left: calc(-1 * (var(--week-compact-column-padding) + var(--week-compact-column-gap)));
+        padding-left: calc(var(--week-compact-event-padding) + var(--week-compact-column-padding) + var(--week-compact-column-gap) + var(--combine-left-offset, 0px));
+      }
+
+      .week-compact-span-event.bridge-next {
+        margin-right: calc(-1 * var(--week-compact-column-padding));
+        padding-right: calc(var(--week-compact-event-padding) + var(--week-compact-column-padding));
+      }
+
+      .week-compact-span-event:hover {
+        transform: none;
+      }
+
+      .week-compact-span-event .week-compact-event-title {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .week-compact-span-event.is-continuation .week-compact-span-content,
+      .week-compact-span-event.is-continuation .event-style-icon,
+      .week-compact-span-event.is-continuation .combined-corner-bubbles {
+        visibility: hidden;
+      }
+
+      /* A continuation segment that starts a new wrapped row repeats the title */
+      .week-day-column.week-compact-row-start .week-compact-span-event.is-continuation .week-compact-span-content {
+        visibility: visible;
+      }
+
+      .week-day-column.week-compact-row-start .week-compact-span-event.bridge-prev {
+        margin-left: 0;
+        padding-left: calc(var(--week-compact-event-padding) + var(--combine-left-offset, 0px));
+      }
+
+      .week-compact-span-spacer {
+        visibility: hidden;
+        pointer-events: none;
       }
 
       .week-compact-event-time {

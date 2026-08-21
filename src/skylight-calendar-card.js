@@ -3009,6 +3009,23 @@ class SkylightCalendarCard extends HTMLElement {
 
 
 
+  updateWeekCompactSpanRowBoundariesFromDom() {
+    if (this._viewMode !== 'week-compact' || !this._root) return;
+
+    const dayColumns = Array.from(this._root.querySelectorAll('.week-compact-container .week-day-column'));
+    if (dayColumns.length === 0) return;
+
+    let previousColumnTop = null;
+    dayColumns.forEach((column) => {
+      const columnTop = Number.isFinite(column.offsetTop)
+        ? column.offsetTop
+        : Math.round(column.getBoundingClientRect?.().top || 0);
+      const startsNewRow = previousColumnTop === null || columnTop > previousColumnTop;
+      column.classList?.toggle('week-compact-row-start', startsNewRow);
+      previousColumnTop = columnTop;
+    });
+  }
+
   cancelMonthCompactMeasurement() {
     if (this._monthMeasureRaf !== null) {
       window.cancelAnimationFrame(this._monthMeasureRaf);
@@ -3119,6 +3136,7 @@ class SkylightCalendarCard extends HTMLElement {
       this.updateWeekStandardFixedOffsetHeightFromDom({ renderOnChange: false });
     } else if (this._viewMode === 'week-compact') {
       this.updateWeekCompactStackedHeaderHeightFromDom({ renderOnChange: false });
+      this.updateWeekCompactSpanRowBoundariesFromDom();
     }
   }
 
@@ -3535,6 +3553,7 @@ class SkylightCalendarCard extends HTMLElement {
     this.updateCalendarBadgesScrollState();
     this.updateWeekStandardFixedOffsetHeightFromDom();
     this.updateWeekCompactStackedHeaderHeightFromDom();
+    this.updateWeekCompactSpanRowBoundariesFromDom();
     this.observeHeaderResize();
     this.observeMonthGridResize();
     if (this._viewMode === 'month' && this._config.compact_height && !this.shouldShowAllEventsInMonth()) {
@@ -3805,6 +3824,11 @@ class SkylightCalendarCard extends HTMLElement {
         renderDayBadges: (date, events) => this.renderDayBadges(date, events),
         renderDayForecast: (date, viewMode) => this.renderDayForecast(date, viewMode),
         renderWeekCompactEvent: (event, date) => this.renderWeekCompactEvent(event, date),
+        renderWeekCompactSpanLane: (lane, laneEvent) => this.renderWeekCompactSpanLane(lane, laneEvent),
+        trimTrailingNullSpanLanes: (lanes) => this.trimTrailingNullMonthSpanLanes(lanes),
+        getAllDaySpanLayoutForDays: (days) => this.buildAllDaySpanLayoutForDays(days),
+        getDateKey: (date) => this.getDateKey(date),
+        getEventKey: (event) => this.getScheduleAllDayEventKey(event),
         t: (key, params) => this.t(key, params)
       }
     });
@@ -3987,7 +4011,11 @@ class SkylightCalendarCard extends HTMLElement {
   }
 
   buildMonthSpanLayoutForWeek(weekDays) {
-    return buildContinuousDaySpanLayout(weekDays, {
+    return this.buildAllDaySpanLayoutForDays(weekDays);
+  }
+
+  buildAllDaySpanLayoutForDays(days) {
+    return buildContinuousDaySpanLayout(days, {
       getDateKey: this.getDateKey.bind(this),
       getEventsForDay: (date) => this.sortEventsForDate(
         this.getEventsForDay(date, { includeHiddenStyledEvents: false }).filter((event) => !this.isEventHiddenByStyle(event)),
@@ -4792,6 +4820,56 @@ class SkylightCalendarCard extends HTMLElement {
     return this.renderEvent(event, date);
   }
 
+  getWeekCompactEventStyleVariables(event) {
+    return `--event-bubble-font-size: ${this.getEventBubbleFontSize(event)}; --event-time-font-size: ${this.getEventTimeFontSize(event)}; --event-location-font-size: ${this.getEventLocationFontSize(event)}; --event-bubble-text-color: ${this.getEventBubbleFontColor(event)};`;
+  }
+
+  renderWeekCompactSpanLane(lane, laneEvent = null) {
+    if (!lane) {
+      // Reserve the lane so events below stay aligned across day columns. The spacer
+      // mirrors the lane owner's bar markup so both are exactly the same height.
+      const spacerEvent = laneEvent || null;
+      return `
+      <div class="week-compact-event week-compact-span-spacer" style="${spacerEvent ? `${this.getEventStyle(spacerEvent)} ${this.getWeekCompactEventStyleVariables(spacerEvent)}` : ''}">
+        <div class="week-compact-span-content">
+          ${!spacerEvent || this.shouldShowEventTime(spacerEvent) ? `<div class="week-compact-event-time">&nbsp;</div>` : ''}
+          <div class="week-compact-event-title">&nbsp;</div>
+        </div>
+      </div>
+    `;
+    }
+
+    const {
+      event,
+      displayTitle,
+      continuesFromPreviousDay,
+      continuesToNextDay,
+      bridgeFromPreviousDay,
+      bridgeToNextDay,
+      isFirstVisibleSegment
+    } = lane;
+    const spanClasses = [
+      'week-compact-event',
+      'week-compact-span-event',
+      continuesFromPreviousDay ? 'continues-prev' : '',
+      continuesToNextDay ? 'continues-next' : '',
+      bridgeFromPreviousDay ? 'bridge-prev' : '',
+      bridgeToNextDay ? 'bridge-next' : '',
+      isFirstVisibleSegment ? '' : 'is-continuation'
+    ].filter(Boolean).join(' ');
+
+    return `
+      <div class="${spanClasses}" style="${this.getEventStyle(event, { suppressLeftIndicator: !isFirstVisibleSegment })} ${this.getWeekCompactEventStyleVariables(event)}" data-event='${JSON.stringify(event).replace(/'/g, "&#39;")}'>
+        <div class="week-compact-span-content">
+          ${this.shouldShowEventTime(event) ? `<div class="week-compact-event-time">${this.t('allDay')}</div>` : ''}
+          <div class="week-compact-event-title">${this.renderEventTitleWithPrefix(event, displayTitle || event.summary || this.t('untitledEvent'))}</div>
+        </div>
+        ${this.renderEventStyleCornerIcon(event)}
+        ${this.renderCombinedCornerBubbles(event)}
+      </div>
+    `;
+  }
+
   renderWeekCompactEvent(event, date) {
     const daySegment = this.getEventDaySegment(event, date);
     if (!daySegment) return '';
@@ -5287,7 +5365,7 @@ class SkylightCalendarCard extends HTMLElement {
     return visibleColors;
   }
 
-  getEventStyle(event, { withBorderAccent = false } = {}) {
+  getEventStyle(event, { withBorderAccent = false, suppressLeftIndicator = false } = {}) {
     const styleOverrides = this.getEventStyleOverrides(event);
     const virtualCalendar = this.getVirtualBadgeForEvent(event);
     const virtualColor = virtualCalendar
@@ -5328,12 +5406,14 @@ class SkylightCalendarCard extends HTMLElement {
     const eventColorMode = this.normalizeEventColorMode(this._config?.event_color_mode);
     if (visibleColors.length <= 1) {
       if (eventColorMode === 'left-neutral') {
-        const barWidth = this.getEventColorBarWidth();
-        return finalizeStyle(`--combine-left-offset: ${barWidth}px; background-color: ${this.getEventNeutralBackgroundColor()}; background-image: linear-gradient(to right, ${primaryColor} 0 ${barWidth}px, transparent ${barWidth}px); background-size: ${barWidth}px 100%; background-position: left top; background-repeat: no-repeat; background-clip: padding-box; ${borderStyle}`);
+        const barWidth = suppressLeftIndicator ? 0 : this.getEventColorBarWidth();
+        const barImage = suppressLeftIndicator ? 'none' : `linear-gradient(to right, ${primaryColor} 0 ${barWidth}px, transparent ${barWidth}px)`;
+        return finalizeStyle(`--combine-left-offset: ${barWidth}px; background-color: ${this.getEventNeutralBackgroundColor()}; background-image: ${barImage}; background-size: ${barWidth}px 100%; background-position: left top; background-repeat: no-repeat; background-clip: padding-box; ${borderStyle}`);
       }
       if (eventColorMode === 'left-tint') {
-        const barWidth = this.getEventColorBarWidth();
-        return finalizeStyle(`--combine-left-offset: ${barWidth}px; background-color: ${this.getEventTintBackgroundColor(primaryColor)}; background-image: linear-gradient(to right, ${primaryColor} 0 ${barWidth}px, transparent ${barWidth}px); background-size: ${barWidth}px 100%; background-position: left top; background-repeat: no-repeat; background-clip: padding-box; ${borderStyle}`);
+        const barWidth = suppressLeftIndicator ? 0 : this.getEventColorBarWidth();
+        const barImage = suppressLeftIndicator ? 'none' : `linear-gradient(to right, ${primaryColor} 0 ${barWidth}px, transparent ${barWidth}px)`;
+        return finalizeStyle(`--combine-left-offset: ${barWidth}px; background-color: ${this.getEventTintBackgroundColor(primaryColor)}; background-image: ${barImage}; background-size: ${barWidth}px 100%; background-position: left top; background-repeat: no-repeat; background-clip: padding-box; ${borderStyle}`);
       }
       return finalizeStyle(`background-color: ${primaryColor}; background-image: none; background-clip: padding-box; ${borderStyle}`);
     }
@@ -5348,14 +5428,14 @@ class SkylightCalendarCard extends HTMLElement {
     const shouldShowCornerBadges = !!styleOverrides?.hasDuplicateBackgroundColors;
 
     if (combineStyle === 'bars') {
-      const barsGradient = indicatorColors.length > 0 ? this.createVerticalBarsGradient(indicatorColors) : 'none';
-      const leftOffset = indicatorColors.length > 0 ? `--combine-left-offset: ${indicatorWidth}px;` : '--combine-left-offset: 0px;';
+      const barsGradient = indicatorColors.length > 0 && !suppressLeftIndicator ? this.createVerticalBarsGradient(indicatorColors) : 'none';
+      const leftOffset = indicatorColors.length > 0 && !suppressLeftIndicator ? `--combine-left-offset: ${indicatorWidth}px;` : '--combine-left-offset: 0px;';
       return finalizeStyle(`${leftOffset} background-color: ${backgroundColor}; background-image: ${barsGradient}; background-size: ${indicatorWidth}px 100%; background-position: left top; background-repeat: no-repeat; background-clip: padding-box; ${shouldShowCornerBadges ? '--combined-corner-bubbles: 1;' : ''} ${borderStyle}`);
     }
 
     if (combineStyle === 'dots') {
-      const dots = indicatorColors.length > 0 ? this.createDotsDecoration(indicatorColors, indicatorWidth) : 'none';
-      const leftOffset = indicatorColors.length > 0 ? `--combine-left-offset: ${indicatorWidth}px;` : '--combine-left-offset: 0px;';
+      const dots = indicatorColors.length > 0 && !suppressLeftIndicator ? this.createDotsDecoration(indicatorColors, indicatorWidth) : 'none';
+      const leftOffset = indicatorColors.length > 0 && !suppressLeftIndicator ? `--combine-left-offset: ${indicatorWidth}px;` : '--combine-left-offset: 0px;';
       return finalizeStyle(`${leftOffset} background-color: ${backgroundColor}; background-image: ${dots}; background-repeat: no-repeat; background-clip: padding-box; ${shouldShowCornerBadges ? '--combined-corner-bubbles: 1;' : ''} ${borderStyle}`);
     }
 
