@@ -10,16 +10,25 @@ on:
 
 permissions:
   contents: write
-  models: read
+  copilot-requests: write
 
 jobs:
   publish:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: main
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Install Copilot CLI
+        id: install_copilot
+        continue-on-error: true
+        run: npm install -g @github/copilot
 
       - name: Read card version
         id: version
@@ -92,17 +101,39 @@ jobs:
 
           cat generated-release-notes.md >> ai-release-prompt.md
 
-      - name: Spiffy release notes with AI
-        id: ai_notes
-        uses: actions/ai-inference@v1
-        with:
-          model: openai/gpt-4o
-          prompt-file: ai-release-prompt.md
-          max-completion-tokens: 2000
+      - name: Start with generated release notes
+        run: cp generated-release-notes.md RELEASE_NOTES.md
 
-      - name: Save AI release notes
+      - name: Spiffy release notes with Copilot
+        id: copilot_notes
+        if: steps.install_copilot.outcome == 'success'
+        continue-on-error: true
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ github.token }}
         run: |
-          cat "${{ steps.ai_notes.outputs.response-file }}" > RELEASE_NOTES.md
+          copilot \
+            -p "$(cat ai-release-prompt.md)" \
+            -s \
+            --no-ask-user \
+            > RELEASE_NOTES.ai.md
+
+          if [ ! -s RELEASE_NOTES.ai.md ]; then
+            echo "Copilot returned an empty response"
+            exit 1
+          fi
+
+          mv RELEASE_NOTES.ai.md RELEASE_NOTES.md
+
+      - name: Report release-note source
+        run: |
+          if [ "${{ steps.copilot_notes.outcome }}" = "success" ]; then
+            echo "Using Copilot-polished release notes."
+          else
+            echo "Copilot polishing unavailable or failed; using GitHub-generated release notes instead."
+          fi
+
+      - name: Finish release notes
+        run: |
           echo "" >> RELEASE_NOTES.md
           echo "---" >> RELEASE_NOTES.md
           echo "" >> RELEASE_NOTES.md

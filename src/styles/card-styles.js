@@ -127,7 +127,7 @@ export function getCardStyles() {
         position: absolute;
         inset: 0;
         z-index: 0;
-        background: var(--calendar-background, var(--theme-card-background, var(--ha-card-background, var(--card-background-color, #ffffff))));
+        background: var(--calendar-background, var(--calendar-forced-background, var(--ha-card-background, var(--card-background-color, var(--calendar-default-background, #ffffff)))));
         opacity: var(--calendar-background-opacity, 1);
         pointer-events: none;
       }
@@ -141,6 +141,8 @@ export function getCardStyles() {
         display: flex;
         align-items: center;
         gap: 16px;
+        min-width: 0;
+        max-width: 100%;
       }
 
       .compact-header-left {
@@ -148,6 +150,8 @@ export function getCardStyles() {
         align-items: center;
         gap: 16px;
         flex-wrap: wrap;
+        min-width: 0;
+        max-width: 100%;
       }
 
       .header-compact.is-wrapped .compact-header-left,
@@ -275,6 +279,9 @@ export function getCardStyles() {
         font-size: 24px;
         font-weight: 600;
         margin: 0;
+        min-width: 0;
+        max-width: 100%;
+        overflow-wrap: anywhere;
       }
 
       .header-title-wrap {
@@ -282,6 +289,10 @@ export function getCardStyles() {
         align-items: baseline;
         gap: 10px;
         flex-wrap: wrap;
+        flex: 1 1 auto;
+        min-width: 0;
+        max-width: 100%;
+        overflow-wrap: anywhere;
       }
 
       .header-time {
@@ -343,10 +354,16 @@ export function getCardStyles() {
         gap: 12px;
         align-items: center;
         flex-wrap: wrap;
+        min-width: 0;
+        max-width: 100%;
       }
 
       .compact-header-controls {
         justify-content: flex-end;
+      }
+
+      .header-controls-only {
+        margin-left: auto;
       }
 
       .period-controls,
@@ -356,6 +373,8 @@ export function getCardStyles() {
         gap: 12px;
         flex: 0 1 auto;
         margin-left: auto;
+        min-width: 0;
+        max-width: 100%;
       }
 
       .header-controls.is-wrapped {
@@ -522,7 +541,9 @@ export function getCardStyles() {
         font-weight: 500;
         color: inherit;
         min-width: 210px;
+        max-width: 100%;
         text-align: center;
+        overflow-wrap: anywhere;
       }
 
       .calendar-container.hide-year .month-year {
@@ -533,8 +554,8 @@ export function getCardStyles() {
         display: grid;
         grid-template-columns: repeat(7, 1fr);
         gap: 1px;
-        background: #e5e7eb;
-        border-top: 1px solid #e5e7eb;
+        background: var(--calendar-grid-color, #e5e7eb);
+        border-top: 1px solid var(--calendar-grid-color, #e5e7eb);
         flex: 1 1 auto;
         min-height: 0;
         overflow: auto;
@@ -842,11 +863,16 @@ export function getCardStyles() {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
         gap: var(--week-compact-column-gap);
-        background: #e5e7eb;
-        border-top: 1px solid #e5e7eb;
+        background: var(--calendar-grid-color, #e5e7eb);
+        border-top: 1px solid var(--calendar-grid-color, #e5e7eb);
         flex: 1 1 auto;
         min-height: 0;
         overflow: auto;
+      }
+
+      .week-compact-container.compact-height {
+        grid-auto-rows: max-content;
+        align-content: start;
       }
 
       .week-day-column {
@@ -857,9 +883,9 @@ export function getCardStyles() {
 
       .week-day-header {
         text-align: center;
-        margin-bottom: 12px;
-        padding-bottom: 12px;
-        border-bottom: 2px solid #e5e7eb;
+        margin-bottom: var(--week-compact-day-header-spacing, 12px);
+        padding-bottom: var(--week-compact-day-header-spacing, 12px);
+        border-bottom: 2px solid var(--calendar-grid-color, #e5e7eb);
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -934,10 +960,10 @@ export function getCardStyles() {
       }
 
       .week-day-name {
-        font-size: 12px;
+        font-size: var(--week-compact-weekday-font-size, 12px);
         font-weight: 600;
         text-transform: uppercase;
-        color: #6b7280;
+        color: var(--week-compact-weekday-color, #6b7280);
         letter-spacing: 0.5px;
       }
 
@@ -1038,6 +1064,11 @@ export function getCardStyles() {
         font-size: 1em;
         font-weight: 500;
         line-height: 1.3;
+        min-width: 0;
+        max-width: 100%;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: break-word;
       }
 
       .event-title-with-prefix {
@@ -1045,6 +1076,18 @@ export function getCardStyles() {
         align-items: center;
         gap: clamp(4px, calc(var(--event-bubble-font-size, 11px) * 0.3), 7px);
         min-width: 0;
+      }
+
+      .week-compact-event-title > .event-title-with-prefix {
+        max-width: 100%;
+      }
+
+      .week-compact-event-title .event-title-prefix-friendly-name {
+        flex: 0 1 45%;
+        min-width: 0;
+        max-width: 45%;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       .event-style-icon {
@@ -1148,14 +1191,14 @@ export function getCardStyles() {
         display: grid;
         grid-template-columns: 88px 1fr;
         gap: 12px;
-        border-top: 1px solid #e5e7eb;
+        border-top: 1px solid var(--calendar-grid-color, #e5e7eb);
         padding-top: 8px;
       }
 
       .agenda-month-banner {
         width: 100%;
-        border-top: 2px solid #d1d5db;
-        border-bottom: 1px solid #d1d5db;
+        border-top: 2px solid var(--calendar-grid-color, #d1d5db);
+        border-bottom: 1px solid var(--calendar-grid-color, #d1d5db);
         color: #4b5563;
         font-size: 24px;
         font-weight: 700;
@@ -1173,7 +1216,7 @@ export function getCardStyles() {
         text-align: center;
         margin-bottom: 12px;
         padding-bottom: 12px;
-        border-bottom: 2px solid #e5e7eb;
+        border-bottom: 2px solid var(--calendar-grid-color, #e5e7eb);
       }
 
       .agenda-day-weekday {
@@ -1220,7 +1263,8 @@ export function getCardStyles() {
         overflow: hidden;
         color: var(--event-bubble-text-color, white);
         position: relative;
-        height: var(--agenda-event-min-height, 68px);
+        height: auto;
+        min-height: var(--agenda-event-min-height, 68px);
         box-sizing: border-box;
         padding-bottom: calc(10px + (var(--combined-corner-bubbles, 0) * 16px));
       }
@@ -1264,6 +1308,7 @@ export function getCardStyles() {
         align-items: baseline;
         gap: 0 8px;
         height: auto;
+        min-height: 0;
         padding: 8px 64px 8px calc(12px + var(--combine-left-offset, 0px));
         padding-bottom: calc(8px + (var(--combined-corner-bubbles, 0) * 16px));
       }
@@ -1326,7 +1371,7 @@ export function getCardStyles() {
         -webkit-overflow-scrolling: touch;
         scrollbar-width: thin;
         background: white;
-        border-bottom: 1px solid #e5e7eb;
+        border-bottom: 1px solid var(--calendar-grid-color, #e5e7eb);
       }
 
       .calendar-badges-container.has-overflow::after,
@@ -1560,7 +1605,7 @@ export function getCardStyles() {
       .week-standard-day-header {
         padding: 16px;
         text-align: center;
-        border-bottom: 1px solid #e5e7eb;
+        border-bottom: 1px solid var(--calendar-grid-color, #e5e7eb);
         background: white;
         display: flex;
         flex-direction: column;
@@ -1607,7 +1652,7 @@ export function getCardStyles() {
       .all-day-events {
         padding: var(--all-day-horizontal-padding);
         background: #f9fafb;
-        border-bottom: 2px solid #e5e7eb;
+        border-bottom: 2px solid var(--calendar-grid-color, #e5e7eb);
         display: flex;
         flex-direction: column;
         gap: 4px;
@@ -1696,7 +1741,7 @@ export function getCardStyles() {
 
       .day-time-slot {
         height: 120px;
-        border-top: 1px solid var(--schedule-hour-line-color, #e5e7eb);
+        border-top: 1px solid var(--calendar-grid-color, var(--schedule-hour-line-color, #e5e7eb));
         position: relative;
         box-sizing: border-box;
         cursor: pointer;
@@ -1854,9 +1899,11 @@ export function getCardStyles() {
         padding: 24px;
         max-width: 500px;
         width: 90%;
+        box-sizing: border-box;
         max-height: 80vh;
         max-height: min(80vh, calc(100dvh - 32px));
         overflow-y: auto;
+        overflow-x: hidden;
         box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
       }
 
@@ -1867,6 +1914,7 @@ export function getCardStyles() {
       }
 
       .modal-content.modal-size-medium {
+        box-sizing: border-box;
         max-width: 500px;
         width: 90%;
       }
@@ -2269,9 +2317,11 @@ export function getCardStyles() {
 
       .form-actions {
         display: flex;
+        flex-wrap: wrap;
         gap: 12px;
         justify-content: flex-end;
         margin-top: 6px;
+        max-width: 100%;
       }
 
       .btn {
@@ -2283,6 +2333,10 @@ export function getCardStyles() {
         transition: all 0.2s;
         border: none;
         font-family: inherit;
+        min-width: 0;
+        max-width: 100%;
+        white-space: normal;
+        overflow-wrap: anywhere;
       }
 
       .btn-primary {
@@ -2328,20 +2382,26 @@ export function getCardStyles() {
 
       .modal-actions {
         display: flex;
+        flex-wrap: wrap;
         gap: 12px;
         justify-content: space-between;
         margin-top: 24px;
         align-items: center;
+        max-width: 100%;
       }
 
       .modal-actions-left {
         display: flex;
+        flex-wrap: wrap;
         gap: 12px;
+        max-width: 100%;
       }
 
       .modal-actions-right {
         display: flex;
+        flex-wrap: wrap;
         gap: 12px;
+        max-width: 100%;
       }
 
       .confirm-dialog {
@@ -2533,7 +2593,7 @@ export function getCardStyles() {
       .calendar-container.dark-mode .week-standard-container,
       .calendar-container.dark-mode .calendar-badges {
         background: #30363f;
-        border-color: #4b5563;
+        border-color: var(--calendar-grid-color, #4b5563);
       }
 
       .calendar-container.dark-mode .calendar-badges-container.has-overflow::after {
@@ -2561,7 +2621,7 @@ export function getCardStyles() {
       .calendar-container.dark-mode .empty-state {
         background: #353c45;
         color: #dde3ea;
-        border-color: #556070;
+        border-color: var(--calendar-grid-color, #556070);
       }
 
       .calendar-container.dark-mode .time-slot {
@@ -2572,7 +2632,7 @@ export function getCardStyles() {
 
       .calendar-container.dark-mode .week-standard-day-header,
       .calendar-container.dark-mode .all-day-events {
-        border-bottom-color: transparent;
+        border-bottom-color: var(--calendar-grid-color, transparent);
       }
 
 	  .calendar-container.dark-mode .day-header,
@@ -2580,7 +2640,7 @@ export function getCardStyles() {
       .calendar-container.dark-mode .month-week-number-cell {
         background: #353b42;
         color: #dde3ea;
-        border-color: #556070;
+        border-color: var(--calendar-grid-color, #556070);
       }
 
       .calendar-container.dark-mode .week-day-column.today .week-day-header {
@@ -2589,11 +2649,16 @@ export function getCardStyles() {
 
       .calendar-container.dark-mode .week-standard-day-name,
       .calendar-container.dark-mode .week-standard-day-date,
-      .calendar-container.dark-mode .week-day-name,
       .calendar-container.dark-mode .week-day-date {
         background: #3b434d;
         color: #dde3ea;
-        border-color: #556070;
+        border-color: var(--calendar-grid-color, #556070);
+      }
+
+      .calendar-container.dark-mode .week-day-name {
+        background: #3b434d;
+        color: var(--week-compact-weekday-color, #dde3ea);
+        border-color: var(--calendar-grid-color, #556070);
       }
 
       .calendar-container.dark-mode .agenda-day-weekday,
@@ -2613,7 +2678,7 @@ export function getCardStyles() {
       }
 
       .calendar-container.dark-mode .week-standard-day-column {
-        border: 1px solid #556070;
+        border: 1px solid var(--calendar-grid-color, #556070);
         box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
       }
 
@@ -2652,8 +2717,6 @@ export function getCardStyles() {
         color: #c7d0db;
       }
 
-      .calendar-container.dark-mode .week-standard-day-column,
-      .calendar-container.dark-mode .week-day-column,
       .calendar-container.dark-mode .modal-content,
       .calendar-container.dark-mode .confirm-dialog,
       .calendar-container.dark-mode .form-input,
@@ -2665,6 +2728,14 @@ export function getCardStyles() {
         background: #3b434d;
         color: #e2e8f0;
         border-color: #606b7b;
+        box-shadow: none;
+      }
+
+      .calendar-container.dark-mode .week-standard-day-column,
+      .calendar-container.dark-mode .week-day-column {
+        background: #3b434d;
+        color: #e2e8f0;
+        border-color: var(--calendar-grid-color, #606b7b);
         box-shadow: none;
       }
 
@@ -2753,16 +2824,16 @@ export function getCardStyles() {
       }
 
       .calendar-container.dark-mode .agenda-day-row {
-        border-top-color: #5b6676;
+        border-top-color: var(--calendar-grid-color, #5b6676);
       }
 
       .calendar-container.dark-mode .agenda-day-label {
-        border-bottom-color: #5b6676;
+        border-bottom-color: var(--calendar-grid-color, #5b6676);
       }
 
       .calendar-container.dark-mode .agenda-month-banner {
-        border-top-color: #5b6676;
-        border-bottom-color: #5b6676;
+        border-top-color: var(--calendar-grid-color, #5b6676);
+        border-bottom-color: var(--calendar-grid-color, #5b6676);
         color: #c7d0db;
       }
 
@@ -2791,7 +2862,7 @@ export function getCardStyles() {
       .calendar-container.custom-background .calendar-grid,
       .calendar-container.custom-background .week-compact-container,
       .calendar-container.custom-background .calendar-badges {
-        border-color: rgba(255, 255, 255, 0.35) !important;
+        border-color: var(--calendar-grid-color, rgba(255, 255, 255, 0.35)) !important;
       }
 
       .calendar-container.custom-background .week-standard-container {
@@ -2799,8 +2870,24 @@ export function getCardStyles() {
       }
 
       .calendar-container.custom-background .calendar-grid {
-        background: rgba(var(--custom-surface-calendar-rgb, 249, 250, 251), var(--custom-surface-alpha, 0.55)) !important;
-        border-top-color: rgba(var(--custom-surface-column-rgb, 255, 255, 255), var(--custom-surface-alpha, 0.55)) !important;
+        background: transparent !important;
+        border-top-color: var(--calendar-grid-color, rgba(255, 255, 255, 0.35)) !important;
+      }
+
+      .calendar-container.custom-background .calendar-grid > *,
+      .calendar-container.custom-background .week-compact-container:not(.single-day-modal) > * {
+        position: relative;
+      }
+
+      .calendar-container.custom-background .calendar-grid > *::before,
+      .calendar-container.custom-background .week-compact-container:not(.single-day-modal) > *::before {
+        content: '';
+        position: absolute;
+        inset: 0 -1px -1px 0;
+        border-right: 1px solid var(--calendar-grid-color, rgba(255, 255, 255, 0.35));
+        border-bottom: 1px solid var(--calendar-grid-color, rgba(255, 255, 255, 0.35));
+        pointer-events: none;
+        z-index: 1;
       }
 
       .calendar-container.custom-background .day-header,
@@ -2814,8 +2901,8 @@ export function getCardStyles() {
       }
 
       .calendar-container.custom-background .week-compact-container {
-        background: rgba(var(--custom-surface-calendar-rgb, 249, 250, 251), var(--custom-surface-alpha, 0.55)) !important;
-        border-top-color: rgba(var(--custom-surface-column-rgb, 255, 255, 255), var(--custom-surface-alpha, 0.55)) !important;
+        background: transparent !important;
+        border-top-color: var(--calendar-grid-color, rgba(255, 255, 255, 0.35)) !important;
       }
 
       .calendar-container.custom-background .week-day-column {
@@ -2846,11 +2933,11 @@ export function getCardStyles() {
 
       .calendar-container.dark-mode.custom-background .week-standard-day-header,
       .calendar-container.dark-mode.custom-background .all-day-events {
-        border-bottom-color: transparent !important;
+        border-bottom-color: var(--calendar-grid-color, rgba(255, 255, 255, 0.35)) !important;
       }
 
       .calendar-container.dark-mode.custom-background .week-standard-day-column {
-        border-color: transparent !important;
+        border-color: var(--calendar-grid-color, rgba(255, 255, 255, 0.35)) !important;
         box-shadow: none !important;
       }
 
@@ -2867,11 +2954,11 @@ export function getCardStyles() {
 
 
       .calendar-container.custom-background .day-cell.other-month {
-        background: rgba(255, 255, 255, 0.12) !important;
+        background: rgba(255, 255, 255, calc(var(--custom-surface-alpha, 0.55) * 0.12)) !important;
       }
 
       .calendar-container.dark-mode.custom-background .day-cell.other-month {
-        background: rgba(0, 0, 0, 0.2) !important;
+        background: rgba(0, 0, 0, calc(var(--custom-surface-alpha, 0.55) * 0.2)) !important;
       }
 
       @media (max-width: 768px) {
@@ -2882,6 +2969,12 @@ export function getCardStyles() {
 
         .header-controls {
           justify-content: space-between;
+          width: 100%;
+        }
+
+        .header-left,
+        .compact-header-left {
+          width: 100%;
         }
 
         .compact-header-controls {
@@ -2899,6 +2992,7 @@ export function getCardStyles() {
         .period-controls .month-year,
         .compact-period-controls .month-year {
           flex: 1;
+          min-width: 0;
           text-align: center;
         }
 

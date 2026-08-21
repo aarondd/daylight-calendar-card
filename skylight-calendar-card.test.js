@@ -83,10 +83,14 @@ const CONFIG_COVERAGE_INVENTORY = {
   default_view: 'setConfig normalizes fallback values and aliases',
   week_days: 'week_days filters configured week rendering days',
   rolling_days_week_compact: 'rolling_days_week_compact shows current day plus configured days',
+  week_compact_weekday_font_size: 'Week Compact day header options preserve defaults and emit scoped custom properties',
+  week_compact_weekday_color: 'Week Compact day header options preserve defaults and emit scoped custom properties',
+  week_compact_day_header_spacing: 'Week Compact day header options preserve defaults and emit scoped custom properties',
   rolling_days_schedule: 'rolling_days_schedule shows current day plus configured days',
   rolling_days_agenda: 'agenda rolling days are configurable and include current day + N days',
   rolling_weeks: 'rolling_weeks month mode renders configured rolling rows from first day of week',
   show_week_numbers_month: 'show_week_numbers_month adds month-only week number headers and cells',
+  week_number_prefix: 'week_number_prefix supports localized, custom, and number-only month labels',
   show_all_events_month: 'month all-events options affect visible event limits',
   show_all_details_month: 'hide_times_for_calendars applies across agenda, week-standard, week-compact, and month renderers',
   month_day_tap_action: 'month_day_tap_action normalizes to create by default and accepts show_events',
@@ -120,6 +124,7 @@ const CONFIG_COVERAGE_INVENTORY = {
   header_weather_sensor: 'weather renders Home Assistant mdi icons instead of emoji glyphs',
   color_source_entity: 'color_source_entity supplies google-sourced event colors keyed by recurrence_id then uid',
   google_color_write_back: 'pushExplicitColorToGoogle calls set_event_color only when write-back is enabled and an explicit color resolves',
+  show_daily_weather_forecast: 'daily weather forecasts default on and can be disabled without hiding header weather',
   header_items: 'header_items normalize supported item shapes and formats',
   hide_event_calendar_bubble: 'setConfig applies visual layout and styling options',
   show_event_location: 'setConfig applies visual layout and styling options',
@@ -139,6 +144,7 @@ const CONFIG_COVERAGE_INVENTORY = {
   show_current_time_bar: 'setConfig applies visual layout and styling options',
   header_color: 'setConfig applies visual layout and styling options',
   header_text_color: 'setConfig applies visual layout and styling options',
+  grid_color: 'setConfig applies visual layout and styling options',
   header_background_transparent: 'setConfig normalizes fallback values and aliases',
   header_background_opacity: 'setConfig applies visual layout and styling options',
   background_transparent: 'setConfig normalizes fallback values and aliases',
@@ -291,8 +297,13 @@ test('month_day_tap_action decides busy vs empty from visible events (getEventsF
 });
 
 // --- showDayModal Add Event button + back-navigation --------------------------
-function renderDayModal({ management = true, writable = true, hideAdd = false } = {}) {
-  const card = makeCard({ entities: ['calendar.family'], enable_event_management: management, hide_add_event_button: hideAdd });
+function renderDayModal({ management = true, writable = true, hideAdd = false, displayTitle = null } = {}) {
+  const card = makeCard({
+    entities: ['calendar.family'],
+    enable_event_management: management,
+    hide_add_event_button: hideAdd,
+    ...(displayTitle ? { event_styles: [{ match: { title: { exact: 'Sample' } }, style: { display_title: displayTitle } }] } : {})
+  });
   card.getWritableCalendars = () => (writable ? ['calendar.family'] : []);
   card.getEventsForDay = () => [];
   // Stub the markup helpers so we don't depend on a fully-normalized event shape.
@@ -463,8 +474,12 @@ test('showDayModal supplies an onSaved callback to showEventModal (fresh reopen)
 });
 
 // --- +N compact modal must NOT reuse post-save navigation (regression guard) ------
-function renderDayCompactModal() {
-  const card = makeCard({ entities: ['calendar.family'], enable_event_management: true });
+function renderDayCompactModal({ displayTitle = null } = {}) {
+  const card = makeCard({
+    entities: ['calendar.family'],
+    enable_event_management: true,
+    ...(displayTitle ? { event_styles: [{ match: { title: { exact: 'Sample' } }, style: { display_title: displayTitle } }] } : {})
+  });
   card.getWritableCalendars = () => ['calendar.family'];
   card.getEventsForDay = () => [];
   card.applyEventModalSizeClass = () => {};
@@ -490,8 +505,33 @@ function renderDayCompactModal() {
   card.getRootElementById = (id) => (id === 'modal-content' ? content : id === 'event-modal' ? modal : { addEventListener: () => {} });
   card._root = { querySelectorAll: (s) => (s === '.week-compact-event' ? [el] : []) };
   card.showDayCompactModal(date, [event]);
-  return { card, handlers };
+  return { card, handlers, content, event };
 }
+
+test('event detail modal retains the original source title when a display alias exists', () => {
+  const { card, content, event } = renderEventModal();
+  card.setConfig({
+    entities: ['calendar.family'],
+    enable_event_management: true,
+    event_styles: [{ match: { title: { exact: 'Sample' } }, style: { display_title: 'Short alias' } }]
+  });
+  card.showEventModal(event);
+
+  assert.match(content.innerHTML, /Sample/);
+  assert.doesNotMatch(content.innerHTML, /Short alias/);
+  assert.equal(event.summary, 'Sample');
+});
+
+test('compact +N and full day-event lists render display title aliases', () => {
+  const alias = 'Short alias';
+  const compact = renderDayCompactModal({ displayTitle: alias });
+  const full = renderDayModal({ displayTitle: alias });
+
+  assert.match(compact.content.innerHTML, /week-compact-event-title">Short alias</);
+  assert.doesNotMatch(compact.content.innerHTML, /week-compact-event-title">Sample</);
+  assert.match(full.html, /day-modal-event-title">Short alias</);
+  assert.doesNotMatch(full.html, /day-modal-event-title">Sample</);
+});
 
 test('+N compact modal keeps close/back only and does NOT supply onSaved to showEventModal', () => {
   const { card, handlers } = renderDayCompactModal();
@@ -524,7 +564,7 @@ function renderEventModal(onSaved) {
   };
   const event = { entityId: 'calendar.family', uid: 'evt-1', summary: 'Sample', start: { dateTime: '2026-05-01T09:00:00Z' }, end: { dateTime: '2026-05-01T10:00:00Z' } };
   card.showEventModal(event, () => {}, { onSaved });
-  return { card, handlers };
+  return { card, handlers, content, event };
 }
 
 test('event detail X button closes a normal modal', () => {
@@ -837,7 +877,7 @@ test('YAML config coverage inventory tracks every normalized schema option', () 
 test('editor schema metadata preserves config key order and editor defaults', () => {
   const card = makeCard();
   const schemaKeys = card.getConfigNormalizationSchema().map((field) => field.key);
-  assert.deepEqual(schemaKeys.slice(0, 12), [
+  assert.deepEqual(schemaKeys.slice(0, 15), [
     'title',
     'entities',
     'firstDayOfWeek',
@@ -849,6 +889,9 @@ test('editor schema metadata preserves config key order and editor defaults', ()
     'default_view',
     'week_days',
     'rolling_days_week_compact',
+    'week_compact_weekday_font_size',
+    'week_compact_weekday_color',
+    'week_compact_day_header_spacing',
     'rolling_days_schedule'
   ]);
   assert.deepEqual(schemaKeys.slice(-8), [
@@ -869,6 +912,8 @@ test('editor schema metadata preserves config key order and editor defaults', ()
   assert.equal(editor.getEditorDefaultValue('event_font_size'), 11);
   assert.equal(editor.getEditorDefaultValue('event_time_font_size'), 9);
   assert.equal(editor.getEditorDefaultValue('event_location_font_size'), 9);
+  assert.equal(editor.getEditorDefaultValue('week_compact_weekday_font_size'), 12);
+  assert.equal(editor.getEditorDefaultValue('week_compact_day_header_spacing'), 12);
   assert.equal(editor.getEditorDefaultValue('event_tint_opacity'), 80);
   assert.equal(editor.getEditorDefaultValue('unknown_editor_field'), 0);
 });
@@ -878,14 +923,14 @@ test('getStubConfig and normalized defaults include key configuration defaults',
   const requiredStubKeys = [
     'default_view', 'first_day_of_week', 'week_days', 'week_start_hour', 'week_end_hour',
     'lock_schedule_hours', 'disable_swipe_controls', 'show_all_events_month', 'show_all_details_month',
-    'month_day_tap_action', 'hide_empty_days', 'agenda_compact_events', 'shorten_event_times', 'time_zone', 'display_full_weekday_names', 'compact_width', 'day_badge_layout_week',
+    'month_day_tap_action', 'hide_empty_days', 'agenda_compact_events', 'shorten_event_times', 'time_zone', 'display_full_weekday_names', 'week_compact_weekday_font_size', 'week_compact_weekday_color', 'week_compact_day_header_spacing', 'compact_width', 'day_badge_layout_week',
     'show_current_time_bar', 'show_event_location', 'location_links', 'use_short_location',
     'event_calendar_friendly_name', 'event_title_prefix', 'past_event_mode', 'event_color_mode',
     'event_neutral_background', 'event_tint_opacity', 'event_color_bar_width', 'combine_style',
     'combine_background', 'hide_calendars', 'hide_header', 'hide_year', 'hide_controls',
     'hide_navigation_buttons', 'hide_add_event_button', 'hide_view_selector',
     'hide_dark_mode_toggle', 'show_dashboard_nav_button', 'header_dashboard_path',
-    'header_weather_sensor', 'color_source_entity', 'header_items', 'calendar_person_entities', 'default_hidden_calendars', 'color_scheme', 'enable_event_management', 'event_modal_size'
+    'header_weather_sensor', 'color_source_entity', 'show_daily_weather_forecast', 'header_items', 'calendar_person_entities', 'default_hidden_calendars', 'color_scheme', 'enable_event_management', 'event_modal_size'
   ];
   for (const key of requiredStubKeys) assert.ok(key in stub, `${key} should exist in getStubConfig()`);
   assert.deepEqual(stub, {
@@ -908,6 +953,9 @@ test('getStubConfig and normalized defaults include key configuration defaults',
     shorten_event_times: false,
     time_zone: '',
     display_full_weekday_names: false,
+    week_compact_weekday_font_size: 12,
+    week_compact_weekday_color: null,
+    week_compact_day_header_spacing: 12,
     compact_width: false,
     show_current_time_bar: false,
     show_event_location: false,
@@ -938,6 +986,7 @@ test('getStubConfig and normalized defaults include key configuration defaults',
     header_dashboard_path: null,
     header_weather_sensor: '',
     color_source_entity: '',
+    show_daily_weather_forecast: true,
     header_items: [],
     calendar_person_entities: {},
     default_hidden_calendars: [],
@@ -1026,6 +1075,7 @@ test('setConfig applies visual layout and styling options', () => {
     display_full_weekday_names: true,
     header_color: '#123456',
     header_text_color: '#ffffff',
+    grid_color: 'rgb(255, 255, 255)',
     header_background_opacity: 55,
     background_opacity: 35,
     background_image_url: 'https://example.com/bg.png',
@@ -1083,6 +1133,7 @@ test('setConfig applies visual layout and styling options', () => {
   assert.equal(card._config.day_badge_layout_week, 'stacked');
   assert.equal(card._config.header_color, '#123456');
   assert.equal(card._config.header_text_color, '#ffffff');
+  assert.equal(card._config.grid_color, 'rgb(255, 255, 255)');
   assert.equal(card._config.header_background_opacity, 55);
   assert.equal(card._config.background_opacity, 35);
   assert.equal(card._config.background_image_url, 'https://example.com/bg.png');
@@ -1106,6 +1157,33 @@ test('setConfig applies visual layout and styling options', () => {
   assert.deepEqual(card._config.default_hidden_calendars, ['calendar.family']);
   assert.equal(card._hiddenCalendars.has('calendar.family'), true);
   assert.equal(card._config.virtual_calendars[0].name, 'home');
+});
+
+test('Week Compact day header options preserve defaults and emit scoped custom properties', () => {
+  const defaultCard = makeCard({ entities: ['calendar.family'], default_view: 'week-compact' });
+  assert.equal(defaultCard._config.week_compact_weekday_font_size, 12);
+  assert.equal(defaultCard._config.week_compact_weekday_color, undefined);
+  assert.equal(defaultCard._config.week_compact_day_header_spacing, 12);
+  const defaultMarkup = defaultCard.renderWeekCompact();
+  assert.match(defaultMarkup, /--week-compact-weekday-font-size: 12px;/);
+  assert.match(defaultMarkup, /--week-compact-day-header-spacing: 12px;/);
+  assert.doesNotMatch(defaultMarkup, /--week-compact-weekday-color:/);
+
+  const customCard = makeCard({
+    entities: ['calendar.family'],
+    default_view: 'week-compact',
+    week_compact_weekday_font_size: 15,
+    week_compact_weekday_color: '#123456',
+    week_compact_day_header_spacing: 3
+  });
+  const customMarkup = customCard.renderWeekCompact();
+  assert.match(customMarkup, /--week-compact-weekday-font-size: 15px;/);
+  assert.match(customMarkup, /--week-compact-weekday-color: #123456;/);
+  assert.match(customMarkup, /--week-compact-day-header-spacing: 3px;/);
+
+  const styles = customCard.getStyles();
+  assert.match(styles, /\.week-day-name\s*\{[\s\S]*font-size: var\(--week-compact-weekday-font-size, 12px\);[\s\S]*color: var\(--week-compact-weekday-color, #6b7280\);/);
+  assert.match(styles, /\.calendar-container\.dark-mode \.week-day-name\s*\{[\s\S]*color: var\(--week-compact-weekday-color, #dde3ea\);/);
 });
 
 
@@ -1885,6 +1963,26 @@ test('show_week_numbers_month adds month-only week number headers and cells', ()
   assert.doesNotMatch(card.renderDayHeaders(), /month-week-number-header/);
 });
 
+test('week_number_prefix supports localized, custom, and number-only month labels', () => {
+  const week27 = new Date(2026, 5, 29, 12);
+  const dutchCard = makeCard({ entities: ['calendar.family'], language: 'nl', show_week_numbers_month: true });
+  assert.equal(dutchCard.formatMonthWeekNumberLabel(week27), 'wk 27');
+
+  const frenchCard = makeCard({ entities: ['calendar.family'], language: 'fr', show_week_numbers_month: true });
+  assert.equal(frenchCard.formatMonthWeekNumberLabel(week27), 'Sem 27');
+
+  const customCard = makeCard({ entities: ['calendar.family'], week_number_prefix: '  Week  ', show_week_numbers_month: true });
+  assert.equal(customCard._config.week_number_prefix, 'Week');
+  assert.equal(customCard.formatMonthWeekNumberLabel(week27), 'Week 27');
+
+  const numberOnlyCard = makeCard({ entities: ['calendar.family'], week_number_prefix: '', show_week_numbers_month: true });
+  assert.equal(numberOnlyCard._config.week_number_prefix, '');
+  assert.equal(numberOnlyCard.formatMonthWeekNumberLabel(week27), '27');
+  const cell = numberOnlyCard.renderMonthWeekNumberCell(week27);
+  assert.match(cell, /aria-label="Week 27"/);
+  assert.match(cell, /month-week-number-text">27<\/span>/);
+});
+
 test('disable_swipe_controls disables swipe controls without affecting agenda', () => {
   const enabledCard = makeCard({ entities: ['calendar.family'] });
   enabledCard._viewMode = 'week-compact';
@@ -2248,6 +2346,28 @@ function getAllDayBodyClassForTitle(html, title) {
   const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return html.match(new RegExp(`<div class="all-day-event([^"]*)"[^>]*"summary":"${escapedTitle}"`))?.[1] || '';
 }
+
+test('week-standard all-day lanes render a long timed event alias with established start-time decoration', () => {
+  const card = makeCard({
+    entities: ['calendar.family'],
+    locale: 'en-US',
+    event_styles: [{ match: { title: { exact: 'Original long event title' } }, style: { display_title: 'Short alias' } }]
+  });
+  card._events = [makeTimedEvent(
+    'Original long event title',
+    '2026-05-04T08:00:00Z',
+    '2026-05-05T09:00:00Z'
+  )];
+
+  const html = renderScheduleAllDayHtml(card);
+  const renderedTitle = html.match(/<div class="all-day-event-title[^"]*">([^<]+)<\/div>/)?.[1];
+
+  assert.equal(renderedTitle, 'Short alias, 8:00 AM');
+  assert.doesNotMatch(renderedTitle, /Original long event title/);
+  assert.equal(countRenderedAllDayBodies(html), 1);
+  assert.ok(countAllDayPlaceholders(html) >= 1);
+  assert.equal(card._events[0].summary, 'Original long event title');
+});
 
 test('schedule all-day multi-day events render once as a continuous span across styling modes', () => {
   for (const event_color_mode of ['classic', 'left-tint', 'left-neutral']) {
@@ -2809,6 +2929,94 @@ test('hide_header removes the header wrapper entirely', () => {
   assert.match(html, /class="calendar-body"/);
 });
 
+test('blank titles omit title markup and empty left containers while standard controls remain visible', () => {
+  for (const title of ['', '   \t']) {
+    const card = makeCard({ entities: ['calendar.family'], title });
+    const html = card.renderStandardHeader();
+
+    assert.doesNotMatch(html, /header-title(?:-wrap)?/);
+    assert.doesNotMatch(html, /class="header-left"/);
+    assert.match(html, /class="header-controls header-controls-only"/);
+  }
+});
+
+test('blank titles retain configured time weather and custom header items without an h2', () => {
+  const card = makeCard({
+    entities: ['calendar.family'],
+    title: '  ',
+    header_time_sensor: 'sensor.time',
+    header_weather_sensor: 'weather.home',
+    header_items: [{ icon: 'mdi:home', text: 'Family' }],
+    hide_controls: true
+  });
+  card._hass = { states: {
+    'sensor.time': { state: '2026-07-25T14:30:00Z', attributes: {} },
+    'weather.home': { state: 'sunny', attributes: { temperature: 21 } }
+  } };
+
+  const html = card.renderStandardHeader();
+  assert.doesNotMatch(html, /<h2 class="header-title">/);
+  assert.match(html, /class="header-title-wrap"/);
+  assert.match(html, /class="header-time"/);
+  assert.match(html, /class="header-weather"/);
+  assert.match(html, /class="header-item"/);
+  assert.match(html, /class="header-left"/);
+});
+
+test('fully empty standard and compact headers render no markup', () => {
+  const standard = makeCard({ entities: ['calendar.family'], title: '', hide_controls: true });
+  assert.equal(standard.renderHeaderTitle(), '');
+  assert.equal(standard.renderStandardHeader(), '');
+
+  const compact = makeCard({
+    entities: ['calendar.family'],
+    title: '\n ',
+    compact_header: true,
+    hide_controls: true,
+    hide_calendars: true
+  });
+  assert.equal(compact.renderHeaderTitle(), '');
+  assert.equal(compact.renderCompactHeader(), '');
+});
+
+test('compact headers omit an empty left container but retain controls or calendar badges', () => {
+  const controls = makeCard({
+    entities: ['calendar.family'],
+    title: '',
+    compact_header: true,
+    hide_calendars: true
+  });
+  const controlsHtml = controls.renderCompactHeader();
+  assert.doesNotMatch(controlsHtml, /class="compact-header-left"/);
+  assert.match(controlsHtml, /class="header-controls compact-header-controls header-controls-only"/);
+
+  const badges = makeCard({
+    entities: ['calendar.family'],
+    title: '',
+    compact_header: true,
+    hide_controls: true
+  });
+  const badgesHtml = badges.renderCompactHeader();
+  assert.match(badgesHtml, /class="compact-header-left"/);
+  assert.match(badgesHtml, /calendar-badge/);
+  assert.doesNotMatch(badgesHtml, /<h2 class="header-title">/);
+});
+
+test('normal titles retain title markup in standard and compact headers', () => {
+  const standard = makeCard({ entities: ['calendar.family'], title: 'Family Calendar' });
+  const standardHtml = standard.renderStandardHeader();
+  assert.match(standardHtml, /<h2 class="header-title">Family Calendar<\/h2>/);
+  assert.doesNotMatch(standardHtml, /header-controls-only/);
+
+  const compact = makeCard({ entities: ['calendar.family'], title: 'Family Calendar', compact_header: true });
+  const compactHtml = compact.renderCompactHeader();
+  assert.match(compactHtml, /<h2 class="header-title">Family Calendar<\/h2>/);
+  assert.doesNotMatch(compactHtml, /header-controls-only/);
+
+  const localizedDefault = makeCard({ entities: ['calendar.family'], language: 'da' });
+  assert.match(localizedDefault.renderStandardHeader(), /<h2 class="header-title">Familiekalender<\/h2>/);
+});
+
 
 
 test('renderEventDescription supports markdown formatting with safe links', () => {
@@ -2879,6 +3087,32 @@ test('weather renders Home Assistant mdi icons instead of emoji glyphs', () => {
   const forecastHtml = card.renderDayForecast(new Date('2026-05-14T00:00:00Z'));
   assert.match(forecastHtml, /<ha-icon icon="mdi:weather-partly-cloudy"><\/ha-icon>/);
   assert.doesNotMatch(forecastHtml, /☀️|⛅/);
+});
+
+test('daily weather forecasts default on and can be disabled without hiding header weather', () => {
+  const weatherState = {
+    state: 'sunny',
+    attributes: {
+      temperature: 21,
+      forecast: [{ datetime: '2026-05-14T12:00:00Z', condition: 'rainy', temperature: 18, templow: 9 }]
+    }
+  };
+  const defaultCard = makeCard({ entities: ['calendar.family'], header_weather_sensor: 'weather.home' });
+  defaultCard._hass = { states: { 'weather.home': weatherState } };
+  assert.equal(defaultCard._config.show_daily_weather_forecast, true);
+  assert.match(defaultCard.renderDayForecast(new Date('2026-05-14T00:00:00Z')), /month-day-forecast|week-day-forecast/);
+
+  const headerOnlyCard = makeCard({
+    entities: ['calendar.family'],
+    header_weather_sensor: 'weather.home',
+    show_daily_weather_forecast: false
+  });
+  headerOnlyCard._hass = { states: { 'weather.home': weatherState } };
+  assert.match(headerOnlyCard.renderHeaderTitle(), /mdi:weather-sunny/);
+  for (const viewMode of ['month', 'week-compact', 'week-standard', 'agenda']) {
+    assert.equal(headerOnlyCard.renderDayForecast(new Date('2026-05-14T00:00:00Z'), viewMode), '');
+  }
+  assert.equal(headerOnlyCard._weatherForecastController.getActiveWeatherEntityId(), null);
 });
 
 
@@ -3236,12 +3470,122 @@ test('editor renders key controls and updates config on change', () => {
   assert.equal(editor._config.past_event_mode, 'hide');
   assert.match(editor.innerHTML, /data-field="past_event_mode"/);
   assert.match(editor.innerHTML, /<option value="hide" selected>Hide<\/option>/);
+  assert.match(editor.innerHTML, /data-field="week_number_prefix_mode"/);
+  assert.match(editor.innerHTML, /data-field="week_compact_weekday_font_size"/);
+  assert.match(editor.innerHTML, /data-color-field="week_compact_weekday_color"/);
+  assert.match(editor.innerHTML, /data-clear-config-field="week_compact_weekday_color"/);
+  assert.match(editor.innerHTML, /data-field="week_compact_day_header_spacing"/);
   editor._config = { entities: ['calendar.family'], show_event_location: false, past_event_mode: 'none' };
   editor._fireConfigChanged = () => {};
   editor.handleChange({ target: { dataset: { field: 'show_event_location' }, type: 'checkbox', checked: true } });
   assert.equal(editor._config.show_event_location, true);
   editor.handleChange({ target: { dataset: { field: 'past_event_mode' }, value: 'muted' } });
   assert.equal(editor._config.past_event_mode, 'muted');
+  editor.handleChange({ target: { dataset: { field: 'week_number_prefix_mode' }, value: 'number_only' } });
+  assert.equal(editor._config.week_number_prefix, '');
+  editor.handleChange({ target: { dataset: { field: 'week_number_prefix_mode' }, value: 'default' } });
+  assert.equal('week_number_prefix' in editor._config, false);
+});
+
+test('editor synchronizes Week Compact weekday color reset state through set and clear transitions', () => {
+  const Editor = customElements.get('skylight-calendar-card-editor');
+  const editor = new Editor();
+  editor._hass = { states: {}, themes: { darkMode: false } };
+  editor.setConfig({ entities: [] });
+  assert.match(editor.innerHTML, /data-clear-config-field="week_compact_weekday_color"[^>]*disabled/);
+
+  const resetButton = {
+    dataset: { clearConfigField: 'week_compact_weekday_color' },
+    disabled: true,
+    addEventListener: () => {}
+  };
+  editor.querySelector = () => null;
+  editor.querySelectorAll = (selector) => selector === '[data-clear-config-field]' ? [resetButton] : [];
+
+  const emittedConfigs = [];
+  editor.dispatchEvent = (event) => {
+    emittedConfigs.push(event.detail.config);
+    return true;
+  };
+
+  editor._colorPickerState = { field: 'week_compact_weekday_color', mapKey: null };
+  editor.applyColorPickerColor('#123456');
+
+  assert.equal(editor._config.week_compact_weekday_color, '#123456');
+  assert.equal(resetButton.disabled, false);
+
+  editor.clearConfigField('week_compact_weekday_color');
+
+  assert.equal('week_compact_weekday_color' in editor._config, false);
+  assert.equal('week_compact_weekday_color' in emittedConfigs.at(-1), false);
+  assert.match(editor.innerHTML, /id="week_compact_weekday_color"[^>]*--selected-color: #6b7280;/);
+  assert.match(editor.innerHTML, /data-clear-config-field="week_compact_weekday_color"[^>]*disabled/);
+});
+
+test('editor previews effective Week Compact weekday colors for light, dark, and custom configs', () => {
+  const Editor = customElements.get('skylight-calendar-card-editor');
+  const renderEditor = (config, darkMode) => {
+    const editor = new Editor();
+    editor._hass = { states: {}, themes: { darkMode } };
+    editor.setConfig({ entities: [], ...config });
+    return editor.innerHTML;
+  };
+
+  assert.match(renderEditor({}, false), /id="week_compact_weekday_color"[^>]*--selected-color: #6b7280;/);
+  assert.match(renderEditor({ color_scheme: 'auto' }, true), /id="week_compact_weekday_color"[^>]*--selected-color: #dde3ea;/);
+  assert.match(renderEditor({ color_scheme: 'dark', week_compact_weekday_color: '#123456' }, false), /id="week_compact_weekday_color"[^>]*--selected-color: #123456;/);
+});
+
+test('editor keeps week number prefix controls synchronized across setConfig updates', () => {
+  const Editor = customElements.get('skylight-calendar-card-editor');
+  const editor = new Editor();
+  const baseConfig = { entities: ['calendar.family'] };
+
+  editor.setConfig(baseConfig);
+  assert.match(editor.innerHTML, /<option value="default" selected>Localized default<\/option>/);
+  assert.doesNotMatch(editor.innerHTML, /data-field="week_number_prefix" type="text"/);
+
+  editor.setConfig({ ...baseConfig, week_number_prefix: '' });
+  assert.match(editor.innerHTML, /<option value="number_only" selected>Number only<\/option>/);
+  assert.doesNotMatch(editor.innerHTML, /data-field="week_number_prefix" type="text"/);
+
+  editor.setConfig({ ...baseConfig, week_number_prefix: 'Week' });
+  assert.match(editor.innerHTML, /<option value="custom" selected>Custom prefix<\/option>/);
+  assert.match(editor.innerHTML, /data-field="week_number_prefix" type="text" value="Week"/);
+
+  editor.setConfig({ ...baseConfig, week_number_prefix: 'wk' });
+  assert.match(editor.innerHTML, /<option value="custom" selected>Custom prefix<\/option>/);
+  assert.match(editor.innerHTML, /data-field="week_number_prefix" type="text" value="wk"/);
+
+  const prefixModeSelect = { dataset: { field: 'week_number_prefix_mode' }, value: '' };
+  editor.querySelector = () => null;
+  editor.querySelectorAll = (selector) => selector === 'select[data-field]' ? [prefixModeSelect] : [];
+  editor.setConfig({ ...baseConfig, week_number_prefix: 'wk', show_event_location: true });
+  assert.equal(prefixModeSelect.value, 'custom');
+});
+
+test('editor keeps default-true checkboxes checked when refreshing legacy config', () => {
+  const Editor = customElements.get('skylight-calendar-card-editor');
+  const editor = new Editor();
+  const eventManagementCheckbox = { dataset: { field: 'enable_event_management' }, checked: false };
+  const dailyWeatherCheckbox = { dataset: { field: 'show_daily_weather_forecast' }, checked: false };
+  editor._config = { entities: ['calendar.family'] };
+  editor.querySelector = () => null;
+  editor.querySelectorAll = (selector) => (
+    selector === 'input[type="checkbox"][data-field]'
+      ? [eventManagementCheckbox, dailyWeatherCheckbox]
+      : []
+  );
+
+  editor.updateFieldValues();
+
+  assert.equal(eventManagementCheckbox.checked, true);
+  assert.equal(dailyWeatherCheckbox.checked, true);
+
+  editor._config.show_daily_weather_forecast = false;
+  editor.updateFieldValues();
+
+  assert.equal(dailyWeatherCheckbox.checked, false);
 });
 
 
@@ -4787,6 +5131,216 @@ test('disconnectedCallback disconnects host ResizeObserver', () => {
   }
 });
 
+function stubLifecycleEnvironment(card) {
+  const originals = {
+    addEventListener: window.addEventListener,
+    removeEventListener: window.removeEventListener,
+    cancelAnimationFrame: window.cancelAnimationFrame
+  };
+  window.addEventListener = () => {};
+  window.removeEventListener = () => {};
+  window.cancelAnimationFrame = () => {};
+  card.attachSystemThemeListener = () => {};
+  card.detachSystemThemeListener = () => {};
+  card.observeHostAndParentResize = () => {};
+  card.teardownWeatherForecastSubscription = () => {};
+  card.updateEventModalOpenState = () => {};
+  card.cancelMonthCompactMeasurement = () => {};
+  card.render = () => {};
+  return () => Object.assign(window, originals);
+}
+
+test('reconnect invalidates a delayed request and promptly replaces it without waiting for staleness', async () => {
+  const card = makeCard({ entities: ['calendar.a'] });
+  const restore = stubLifecycleEnvironment(card);
+  card._hass = { user: { id: 'user-1' }, states: {} };
+  card.getEventFetchRange = () => ({ startDate: new Date('2026-07-01T00:00:00Z'), endDate: new Date('2026-08-01T00:00:00Z') });
+  const pending = [];
+  let fetchCount = 0;
+  card.fetchEventsByCalendarInRange = () => {
+    fetchCount += 1;
+    return new Promise(resolve => pending.push(resolve));
+  };
+  card.persistEventCacheSnapshot = () => {};
+  card.loadEventCacheForCurrentConfig = () => {};
+  card.ensureEventsForCurrentRange = originalEnsureEventsForCurrentRange.bind(card);
+
+  try {
+    const oldRequest = card.updateEvents();
+    assert.equal(fetchCount, 1);
+    card.disconnectedCallback();
+    card.connectedCallback();
+    assert.equal(card._pendingEventRefreshAfterCurrentFetch, true);
+
+    pending[0]({
+      'calendar.a': { success: true, events: [{ entityId: 'calendar.a', summary: 'obsolete', start: { date: '2026-07-10' }, end: { date: '2026-07-11' } }] }
+    });
+    await oldRequest;
+    assert.equal(fetchCount, 2);
+    assert.deepEqual(card._events, []);
+
+    pending[1]({
+      'calendar.a': { success: true, events: [{ entityId: 'calendar.a', summary: 'reconnected', start: { date: '2026-07-12' }, end: { date: '2026-07-13' } }] }
+    });
+    while (card._fetching) await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(card._events[0].summary, 'reconnected');
+    assert.equal(fetchCount, 2);
+  } finally {
+    restore();
+  }
+});
+
+test('reconnect restarts invalidated delayed cache hydration and ignores its obsolete result', async () => {
+  const card = makeCard({ entities: ['calendar.a'] });
+  const restore = stubLifecycleEnvironment(card);
+  card._hass = null;
+  const pending = [];
+  card.loadEventCacheForCurrentConfig = function() {
+    const generation = ++this._eventCacheGeneration;
+    return new Promise(resolve => pending.push(() => {
+      if (generation === this._eventCacheGeneration) this._events = [{ summary: `cache-${generation}` }];
+      resolve();
+    }));
+  };
+
+  try {
+    const oldCacheRead = card.loadEventCacheForCurrentConfig();
+    card.disconnectedCallback();
+    card.connectedCallback();
+    assert.equal(pending.length, 2);
+    pending[0]();
+    await oldCacheRead;
+    assert.deepEqual(card._events, []);
+    pending[1]();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(card._events[0].summary, `cache-${card._eventCacheGeneration}`);
+  } finally {
+    restore();
+  }
+});
+
+test('repeated reconnects coalesce replacement event fetches and first connection stays unchanged', async () => {
+  const card = makeCard({ entities: ['calendar.a'] });
+  const restore = stubLifecycleEnvironment(card);
+  card._hass = { user: { id: 'user-1' }, states: {} };
+  card.getEventFetchRange = () => ({ startDate: new Date('2026-07-01T00:00:00Z'), endDate: new Date('2026-08-01T00:00:00Z') });
+  const pending = [];
+  let fetchCount = 0;
+  let cacheLoads = 0;
+  card.fetchEventsByCalendarInRange = () => {
+    fetchCount += 1;
+    return new Promise(resolve => pending.push(resolve));
+  };
+  card.loadEventCacheForCurrentConfig = () => { cacheLoads += 1; };
+  card.persistEventCacheSnapshot = () => {};
+  card.ensureEventsForCurrentRange = originalEnsureEventsForCurrentRange.bind(card);
+
+  try {
+    card.connectedCallback();
+    assert.equal(fetchCount, 0);
+    assert.equal(cacheLoads, 0);
+    const oldRequest = card.updateEvents();
+    for (let index = 0; index < 3; index += 1) {
+      card.disconnectedCallback();
+      card.connectedCallback();
+    }
+    assert.equal(fetchCount, 1);
+    assert.equal(cacheLoads, 3);
+    pending[0]({ 'calendar.a': { success: true, events: [] } });
+    await oldRequest;
+    assert.equal(fetchCount, 2);
+    pending[1]({ 'calendar.a': { success: true, events: [] } });
+    while (card._fetching) await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(fetchCount, 2);
+  } finally {
+    restore();
+  }
+});
+
+test('reconnect preserves usable in-memory events instead of reloading an older cache snapshot', () => {
+  const card = makeCard({ entities: ['calendar.a'] });
+  const restore = stubLifecycleEnvironment(card);
+  card._hass = { user: { id: 'user-1' }, states: {} };
+  card._events = [{ entityId: 'calendar.a', summary: 'fresh network event' }];
+  card._loadedEventRange = {
+    startDate: new Date('2026-07-01T00:00:00Z'),
+    endDate: new Date('2026-08-01T00:00:00Z')
+  };
+  let cacheLoads = 0;
+  card.loadEventCacheForCurrentConfig = () => { cacheLoads += 1; };
+  card.ensureEventsForCurrentRange = () => {};
+
+  try {
+    card.disconnectedCallback();
+    card.connectedCallback();
+
+    assert.equal(cacheLoads, 0);
+    assert.equal(card._events[0].summary, 'fresh network event');
+  } finally {
+    restore();
+  }
+});
+
+test('reconnect cache hydration preserves fresher per-calendar data after a partial fetch', () => {
+  const card = makeCard({ entities: ['calendar.a', 'calendar.b'] });
+  const restore = stubLifecycleEnvironment(card);
+  const range = { startDate: new Date('2026-07-01T00:00:00Z'), endDate: new Date('2026-08-01T00:00:00Z') };
+  const freshRefresh = Date.parse('2026-07-15T12:00:00Z');
+  const cachedRefresh = Date.parse('2026-07-10T12:00:00Z');
+  card._hass = { user: { id: 'user-1' }, states: {} };
+  card._eventsByCalendar = {
+    'calendar.a': [{ entityId: 'calendar.a', summary: 'fresh network a', start: { date: '2026-07-12' }, end: { date: '2026-07-13' } }]
+  };
+  card._calendarEventMetadata = {
+    'calendar.a': { range, lastSuccessfulRefresh: freshRefresh, lastNetworkSuccessRequest: 1 },
+    'calendar.b': { refreshFailed: true }
+  };
+  card.recomputeEventState();
+  assert.equal(card._loadedEventRange, null);
+
+  const snapshot = {
+    eventsByCalendar: {
+      'calendar.a': [{ entityId: 'calendar.a', summary: 'older cached a', start: { date: '2026-07-05' }, end: { date: '2026-07-06' } }],
+      'calendar.b': [{ entityId: 'calendar.b', summary: 'cached b', start: { date: '2026-07-07' }, end: { date: '2026-07-08' } }]
+    },
+    perCalendarMetadata: {
+      'calendar.a': { range, lastSuccessfulRefresh: cachedRefresh },
+      'calendar.b': { range, lastSuccessfulRefresh: cachedRefresh }
+    }
+  };
+  card.loadEventCacheForCurrentConfig = function() {
+    const hydratable = this.getHydratableEventCacheSnapshotData(snapshot, this._eventFetchGeneration);
+    this.applyEventsByCalendar(hydratable.eventsByCalendar, {
+      startDate: range.startDate,
+      endDate: range.endDate,
+      lastSuccessfulRefresh: cachedRefresh,
+      successfulEntityIds: hydratable.successfulEntityIds,
+      source: 'cache',
+      requestId: this._eventFetchGeneration,
+      perCalendarMetadata: hydratable.perCalendarMetadata
+    });
+  };
+  card.ensureEventsForCurrentRange = function() {
+    this.applyEventsByCalendar({}, {
+      successfulEntityIds: [],
+      failedEntityIds: ['calendar.a', 'calendar.b'],
+      source: 'network',
+      requestId: this._eventFetchGeneration
+    });
+  };
+
+  try {
+    card.disconnectedCallback();
+    card.connectedCallback();
+
+    assert.equal(card._eventsByCalendar['calendar.a'][0].summary, 'fresh network a');
+    assert.equal(card._eventsByCalendar['calendar.b'][0].summary, 'cached b');
+    assert.equal(card._lastEventRefreshFailed, true);
+  } finally {
+    restore();
+  }
+});
+
 test('day_badge CSS variables do not leak into non-badge selectors', () => {
   const card = makeCard({ entities: ['calendar.a'] });
   const styles = card.getStyles();
@@ -5712,6 +6266,78 @@ test('custom event colors override event_styles backgrounds while preserving oth
   assert.match(style, /filter: grayscale\(20%\)/);
 });
 
+test('display_title normalizes nonempty strings and preserves fallback and original-title matching', () => {
+  const card = makeCard({
+    entities: ['calendar.family'],
+    event_styles: [
+      { match: { title: { exact: 'My Long Title Event' } }, priority: 1, style: { display_title: '  My Event  ' } },
+      { match: { title: { exact: 'My Event' } }, priority: 20, style: { display_title: 'Must Not Cascade' } },
+      { match: { calendar: 'calendar.family' }, priority: 0, style: { display_title: 'Lower Priority' } }
+    ]
+  });
+  const event = { entityId: 'calendar.family', summary: 'My Long Title Event' };
+
+  assert.equal(card._config.event_styles[0].style.display_title, 'My Event');
+  assert.equal(card.getEventDisplayTitle(event), 'My Event');
+  assert.equal(event.summary, 'My Long Title Event');
+  assert.equal(card.getEventDisplayTitle({ entityId: 'calendar.other', summary: 'Original' }), 'Original');
+  assert.equal(card.getEventDisplayTitle({ entityId: 'calendar.other', summary: '' }), 'Untitled Event');
+
+  for (const invalid of ['', '   ', 42, null, {}, []]) {
+    assert.equal(card.normalizeEventStyleBlock({ display_title: invalid }).display_title, undefined);
+  }
+});
+
+test('display_title uses event-style priority and combined-event merging', () => {
+  const card = makeCard({
+    entities: ['calendar.a', 'calendar.b'],
+    combine_calendars: true,
+    event_styles: [
+      { match: { calendar: 'calendar.a' }, priority: 2, style: { display_title: 'Alias A' } },
+      { match: { calendar: 'calendar.b' }, priority: 5, style: { display_title: 'Alias B' } }
+    ]
+  });
+  const source = (entityId) => ({ entityId, color: '#123456', summary: 'Original', location: '', start: { dateTime: '2026-05-01T10:00:00Z' }, end: { dateTime: '2026-05-01T11:00:00Z' } });
+  const combined = card.combineDuplicateCalendarEvents([source('calendar.a'), source('calendar.b')])[0];
+
+  assert.equal(card.getEventDisplayTitle(combined), 'Alias B');
+  assert.equal(combined.summary, 'Original');
+  assert.ok(combined.sourceEvents.every(event => event.summary === 'Original'));
+});
+
+test('display_title renders escaped aliases in month, compact, schedule, and agenda views', () => {
+  const card = makeCard({
+    entities: ['calendar.family'],
+    event_styles: [{ match: { title: { exact: 'Original title' } }, style: { display_title: '<b>Alias & title</b>' } }]
+  });
+  const timed = { entityId: 'calendar.family', color: '#123456', summary: 'Original title', start: { dateTime: '2026-05-14T08:00:00Z' }, end: { dateTime: '2026-05-14T09:00:00Z' } };
+  const date = new Date('2026-05-14T00:00:00Z');
+  const escapedAlias = '&lt;b&gt;Alias &amp; title&lt;/b&gt;';
+
+  assert.match(card.renderEvent(timed, date), new RegExp(escapedAlias));
+  assert.match(card.renderWeekCompactEvent(timed, date), new RegExp(escapedAlias));
+  assert.match(card.renderTimedEventsForDay([timed], date, 0, 23, 40), new RegExp(escapedAlias));
+  assert.match(card.renderMonthSpanLane({ event: timed, isFirstVisibleSegment: true, extendsBeforeVisibleRange: false, extendsAfterVisibleRange: false, visibleDaySpan: 2 }), new RegExp(escapedAlias));
+
+  card.getAgendaDays = () => [date];
+  card.getEventsForDay = () => [timed];
+  card.ensureAgendaWindowInitialized = () => {};
+  card.getAgendaEventMinHeight = () => '40px';
+  assert.match(card.renderAgenda(), new RegExp(escapedAlias));
+  assert.doesNotMatch(card.renderAgenda(), /<b>Alias & title<\/b>/);
+});
+
+test('schedule all-day treatment preserves localized decoration for the resolved display title', () => {
+  const card = makeCard({
+    entities: ['calendar.family'],
+    event_styles: [{ match: { title: 'Long original' }, style: { display_title: 'My Event' } }]
+  });
+  card.formatEventTime = () => '8:00 AM';
+  const event = { entityId: 'calendar.family', summary: 'Long original', start: { dateTime: '2026-05-01T08:00:00Z' }, end: { dateTime: '2026-05-03T09:00:00Z' } };
+
+  assert.equal(card.getScheduleVisualInfo(event).displayTitle, 'My Event, 8:00 AM');
+});
+
 test('custom event colors drive left accent and tint modes', async () => {
   const { applyCustomEventColor } = await import('./src/events/custom-event-colors.js');
   const event = { entityId: 'calendar.a', uid: 'custom-2', color: '#222222', summary: 'Accent', start: { dateTime: '2026-05-01T09:00:00Z' }, end: { dateTime: '2026-05-01T10:00:00Z' } };
@@ -5761,6 +6387,28 @@ test('event font color precedence and fallback contrast use final custom backgro
   const fallback = makeCard({ entities: ['calendar.a'] });
   fallback._customEventColors = applyCustomEventColor(fallback._customEventColors, event, 'this', '#000000', { getEventIdentityKey: fallback.getEventIdentityKey.bind(fallback) });
   assert.equal(fallback.getEventBubbleFontColor(event), 'white');
+});
+
+test('combined uses configured neutral custom color', () => {
+  const card = makeCard({
+    entities: ['calendar.a', 'calendar.b'],
+    combine_calendars: true,
+    combine_style: 'bars',
+    combine_background: 'neutral',
+    event_neutral_background: '#dddddd',
+    virtual_calendars: [{ id: 'family', name: 'Family', entities: ['calendar.a'], color: '#123123' }],
+    event_styles: [
+      { match: { calendar: 'virtual:family' }, priority: 5, style: { background_color: '#999999' } },
+      { match: { calendar: 'calendar.b' }, priority: 1, style: { background_color: '#555555' } }
+    ]
+  });
+  const events = card.combineDuplicateCalendarEvents([
+    { entityId: 'calendar.a', color: '#ff0000', summary: 'Dup', location: '', start: { dateTime: '2026-05-01T10:00:00Z' }, end: { dateTime: '2026-05-01T11:00:00Z' } },
+    { entityId: 'calendar.b', color: '#00ff00', summary: 'Dup', location: '', start: { dateTime: '2026-05-01T10:00:00Z' }, end: { dateTime: '2026-05-01T11:00:00Z' } }
+  ]);
+  const combinedEvent = events.find((e) => e.isCombinedCalendarEvent);
+  const style = card.getEventStyle(combinedEvent);
+  assert.match(style, /background-color: #dddddd/);
 });
 
 test('feature order: combine then virtual then event styles influences visible colors/style', () => {
@@ -8331,6 +8979,82 @@ test('event identity is HA recurrence-aware across merge and chunk deduplication
   assert.deepEqual(result.events.map(event => event.summary), ['first', 'second']);
 });
 
+test('object recurrence IDs are normalized across identity, fetch, reconciliation, and custom colors', async () => {
+  const { fetchEventsForCalendar } = await import('./src/events/event-fetcher.js');
+  const { getEventIdentityKey, normalizeCalendarEvent, normalizeRecurrenceId } = await import('./src/events/event-normalizer.js');
+  const { applyCustomEventColor, createEmptyCustomEventColors, resolveCustomEventColor } = await import('./src/events/custom-event-colors.js');
+  const dateTimeA = { uid: 'series', recurrence_id: { dateTime: '2026-01-01T10:00:00Z', rrule: null }, summary: 'first', start: { dateTime: '2026-01-01T10:00:00Z' }, end: { dateTime: '2026-01-01T11:00:00Z' } };
+  const dateTimeB = { uid: 'series', recurrence_id: { dateTime: '2026-01-08T10:00:00Z', rrule: null }, summary: 'second', start: { dateTime: '2026-01-08T10:00:00Z' }, end: { dateTime: '2026-01-08T11:00:00Z' } };
+  const dateA = { uid: 'all-day-series', recurrence_id: { date: '2026-01-02' }, start: { date: '2026-01-02' }, end: { date: '2026-01-03' } };
+  const dateB = { uid: 'all-day-series', recurrence_id: { date: '2026-01-09' }, start: { date: '2026-01-09' }, end: { date: '2026-01-10' } };
+
+  assert.equal(normalizeRecurrenceId({ dateTime: 'preferred', date: 'ignored' }), 'preferred');
+  assert.equal(normalizeRecurrenceId('legacy-id'), 'legacy-id');
+  assert.equal(normalizeRecurrenceId({ z: 1, a: 2 }), '{"a":2,"z":1}');
+  assert.notEqual(getEventIdentityKey('calendar.a', dateTimeA), getEventIdentityKey('calendar.a', dateTimeB));
+  assert.notEqual(getEventIdentityKey('calendar.a', dateA), getEventIdentityKey('calendar.a', dateB));
+  assert.equal(getEventIdentityKey('calendar.a', { uid: 'legacy', recurrence_id: 'legacy-id' }), 'calendar.a|legacy|legacy-id');
+
+  const result = await fetchEventsForCalendar({
+    hass: { callWS: async () => [dateTimeA, dateTimeB], callApi: async () => [] },
+    entityId: 'calendar.a',
+    chunks: [{ startDate: new Date('2026-01-01'), endDate: new Date('2026-01-10') }, { startDate: new Date('2026-01-08'), endDate: new Date('2026-01-15') }],
+    formatLocalDate: date => date.toISOString().slice(0, 10),
+    getCalendarColor: () => '#123456',
+    getEventIdentityKey,
+    normalizeCalendarEvent
+  });
+  assert.deepEqual(result.events.map(event => event.summary), ['first', 'second']);
+
+  const card = makeCard({ entities: ['calendar.a'] });
+  const reconciled = card.reconcileEventsForFetchedRange([
+    { ...dateTimeA, entityId: 'calendar.a', summary: 'stale first' },
+    { ...dateTimeB, entityId: 'calendar.a' }
+  ], [{ ...dateTimeA, entityId: 'calendar.a', summary: 'fresh first' }], {
+    startDate: new Date('2026-01-01T00:00:00Z'), endDate: new Date('2026-01-02T00:00:00Z')
+  });
+  assert.deepEqual(reconciled.map(event => event.summary), ['fresh first', 'second']);
+
+  let colors = createEmptyCustomEventColors();
+  colors = applyCustomEventColor(colors, { ...dateTimeA, entityId: 'calendar.a' }, 'this', '#112233', { getEventIdentityKey });
+  colors = applyCustomEventColor(colors, { ...dateTimeB, entityId: 'calendar.a' }, 'this', '#445566', { getEventIdentityKey });
+  assert.equal(resolveCustomEventColor({ ...dateTimeA, entityId: 'calendar.a' }, colors, { getEventIdentityKey }), '#112233');
+  assert.equal(resolveCustomEventColor({ ...dateTimeB, entityId: 'calendar.a' }, colors, { getEventIdentityKey }), '#445566');
+});
+
+test('recurring update and delete payloads normalize object recurrence IDs', async () => {
+  const { buildDeleteEventPayload, buildUpdateEventServiceData, buildUpdateEventWebSocketPayload, getRecurringUpdateControls } = await import('./src/events/event-service.js');
+  const originalEvent = { entityId: 'calendar.a', uid: 'series', rrule: 'FREQ=WEEKLY', recurrence_id: { dateTime: '2026-01-01T10:00:00Z', rrule: null } };
+  const eventData = { summary: 'Updated', rrule: 'FREQ=WEEKLY', start: { dateTime: '2026-01-01T12:00:00Z' }, end: { dateTime: '2026-01-01T13:00:00Z' } };
+  const controls = getRecurringUpdateControls(originalEvent, eventData, 'future');
+  assert.equal(controls.recurrenceId, '2026-01-01T10:00:00Z');
+  assert.equal(buildUpdateEventServiceData(originalEvent, eventData, originalEvent.recurrence_id).recurrence_id, '2026-01-01T10:00:00Z');
+  assert.equal(buildUpdateEventWebSocketPayload(originalEvent, eventData, originalEvent.recurrence_id).recurrence_id, '2026-01-01T10:00:00Z');
+  assert.equal(buildDeleteEventPayload('calendar.a', 'series', { date: '2026-01-01' }).recurrence_id, '2026-01-01');
+});
+
+test('recurrence identity cache schema bump invalidates prior snapshots', async () => {
+  const { EVENT_CACHE_SCHEMA_VERSION, normalizeEventCacheSnapshot } = await import('./src/events/event-cache.js');
+  const validSnapshot = {
+    schemaVersion: EVENT_CACHE_SCHEMA_VERSION,
+    configSignature: 'recurrence-identity',
+    coveredRange: { start: '2026-01-01T00:00:00Z', end: '2026-02-01T00:00:00Z' },
+    lastSuccessfulRefresh: 1,
+    eventsByCalendar: {
+      'calendar.a': [{
+        entityId: 'calendar.a',
+        uid: 'series',
+        recurrence_id: { dateTime: '2026-01-01T10:00:00Z' },
+        start: { dateTime: '2026-01-01T10:00:00Z' },
+        end: { dateTime: '2026-01-01T11:00:00Z' }
+      }]
+    }
+  };
+  assert.equal(EVENT_CACHE_SCHEMA_VERSION, 3);
+  assert.equal(normalizeEventCacheSnapshot({ ...validSnapshot, schemaVersion: 2 }), null);
+  assert.notEqual(normalizeEventCacheSnapshot(validSnapshot), null);
+});
+
 test('UID-only occurrences use start and end for fetch and merge identity', async () => {
   const { fetchEventsForCalendar, mergeEvents } = await import('./src/events/event-fetcher.js');
   const { getEventIdentityKey, normalizeCalendarEvent } = await import('./src/events/event-normalizer.js');
@@ -9155,6 +9879,30 @@ test('normal hass update does not queue redundant refresh while forced setConfig
   assert.equal(card._pendingEventRefreshAfterCurrentFetch, false);
 });
 
+test('recent invalidated fetch timestamp does not delay an entirely unloaded card', async () => {
+  const card = makeCard({ entities: ['calendar.a'] });
+  card._hass = { user: { id: 'user-1' }, states: {} };
+  card._lastFetch = Date.now();
+  card._loadedEventRange = null;
+  card._calendarEventMetadata = {};
+  card.getVisibleDateRange = () => ({ startDate: new Date('2026-07-10T00:00:00Z'), endDate: new Date('2026-07-17T00:00:00Z') });
+  card.getEventFetchRange = () => ({ startDate: new Date('2026-07-01T00:00:00Z'), endDate: new Date('2026-08-01T00:00:00Z') });
+  let fetchCount = 0;
+  card.fetchEventsByCalendarInRange = async () => {
+    fetchCount += 1;
+    return {
+      'calendar.a': { success: true, events: [{ entityId: 'calendar.a', summary: 'prompt', start: { date: '2026-07-12' }, end: { date: '2026-07-13' } }] }
+    };
+  };
+  card.persistEventCacheSnapshot = () => {};
+  card.ensureEventsForCurrentRange = originalEnsureEventsForCurrentRange.bind(card);
+
+  await card.ensureEventsForCurrentRange();
+
+  assert.equal(fetchCount, 1);
+  assert.equal(card._events[0].summary, 'prompt');
+});
+
 test('active fetch queues follow-up when switched view needs uncovered range', async () => {
   const card = makeCard({ entities: ['calendar.a'] });
   card._hass = { user: { id: 'user-1' }, states: {} };
@@ -9228,6 +9976,95 @@ test('view change requiring refresh renders even when fetched events are identic
   assert.equal(rendered, 1);
 });
 
+test('partial calendar fetch failure allows navigation refresh during retry throttle', async () => {
+  const card = makeCard({ entities: ['calendar.a', 'calendar.b'] });
+  card._hass = { user: { id: 'user-1' }, states: {} };
+  card._loadedEventRange = null;
+  let fetchCount = 0;
+  let renderCount = 0;
+  card.getVisibleDateRange = () => ({ startDate: new Date('2026-03-10T00:00:00Z'), endDate: new Date('2026-03-17T00:00:00Z') });
+  card.getEventFetchRange = () => ({ startDate: new Date('2026-03-01T00:00:00Z'), endDate: new Date('2026-04-01T00:00:00Z') });
+  card.fetchEventsByCalendarInRange = async () => {
+    fetchCount += 1;
+    return {
+      'calendar.a': { success: true, events: [{ entityId: 'calendar.a', summary: 'a', start: { date: '2026-03-10' }, end: { date: '2026-03-11' } }] },
+      'calendar.b': { success: false, events: [] }
+    };
+  };
+  card.render = () => { renderCount += 1; };
+  card.persistEventCacheSnapshot = () => {};
+  card.ensureEventsForCurrentRange = originalEnsureEventsForCurrentRange.bind(card);
+
+  const originalDateNow = Date.now;
+  Date.now = () => Date.parse('2026-03-01T12:00:00Z');
+  try {
+    await card.ensureEventsForCurrentRange();
+    assert.equal(fetchCount, 1);
+    assert.equal(card._loadedEventRange, null);
+    assert.ok(card._calendarEventMetadata['calendar.a'].range);
+    renderCount = 0;
+
+    await card.ensureEventsForCurrentRange({ renderIfCovered: true });
+    assert.equal(fetchCount, 2);
+    assert.equal(renderCount, 1);
+  } finally {
+    Date.now = originalDateNow;
+  }
+});
+
+test('total calendar fetch failure keeps unloaded range retries throttled', async () => {
+  const card = makeCard({ entities: ['calendar.a', 'calendar.b'] });
+  card._hass = { user: { id: 'user-1' }, states: {} };
+  card._loadedEventRange = null;
+  card.getVisibleDateRange = () => ({ startDate: new Date('2026-03-10T00:00:00Z'), endDate: new Date('2026-03-17T00:00:00Z') });
+  card.getEventFetchRange = () => ({ startDate: new Date('2026-03-01T00:00:00Z'), endDate: new Date('2026-04-01T00:00:00Z') });
+  let fetchCount = 0;
+  let renderCount = 0;
+  card.fetchEventsByCalendarInRange = async () => {
+    fetchCount += 1;
+    return {
+      'calendar.a': { success: false, events: [] },
+      'calendar.b': { success: false, events: [] }
+    };
+  };
+  card.render = () => { renderCount += 1; };
+  card.ensureEventsForCurrentRange = originalEnsureEventsForCurrentRange.bind(card);
+
+  const originalDateNow = Date.now;
+  let now = Date.parse('2026-03-01T12:00:00Z');
+  Date.now = () => now;
+  try {
+    await card.ensureEventsForCurrentRange();
+    assert.equal(fetchCount, 1);
+    assert.equal(card._loadedEventRange, null);
+    assert.equal(card.isDateRangeCoveredByLoadedEvents(new Date('2026-03-10T00:00:00Z'), new Date('2026-03-17T00:00:00Z')), false);
+    renderCount = 0;
+
+    await card.ensureEventsForCurrentRange();
+    assert.equal(fetchCount, 1);
+    assert.equal(renderCount, 0);
+    assert.equal(card._loadedEventRange, null);
+
+    await card.ensureEventsForCurrentRange({ renderIfCovered: true });
+    assert.equal(fetchCount, 1);
+    assert.equal(renderCount, 1);
+    assert.equal(card._loadedEventRange, null);
+
+    now += 60000;
+    await card.ensureEventsForCurrentRange();
+    assert.equal(fetchCount, 1);
+    assert.equal(card._loadedEventRange, null);
+
+    now += 1;
+    await card.ensureEventsForCurrentRange();
+    assert.equal(fetchCount, 2);
+    assert.equal(card._loadedEventRange, null);
+    assert.equal(card.isDateRangeCoveredByLoadedEvents(new Date('2026-03-10T00:00:00Z'), new Date('2026-03-17T00:00:00Z')), false);
+  } finally {
+    Date.now = originalDateNow;
+  }
+});
+
 test('today navigation requiring refresh renders even when fetched events are identical', async () => {
   const card = makeCard({ entities: ['calendar.a'] });
   card._hass = { user: { id: 'user-1' }, states: {} };
@@ -9299,4 +10136,115 @@ test('failed refresh preserves last-known-good events and stale warning timing',
   card.applyEventsByCalendar({ 'calendar.a': [] }, { startDate: new Date(), endDate: new Date(), lastSuccessfulRefresh: Date.now() });
   card._lastEventRefreshFailed = false;
   assert.equal(card.shouldShowEventRefreshWarning(Date.now() + 31 * 60 * 1000), false);
+});
+
+test('parseRRule infers weekday from start date when WEEKLY rule omits BYDAY', () => {
+  const card = makeCard({ entities: ['calendar.a'] });
+  const wednesday = new Date(2026, 6, 15); // 2026-07-15 is a Wednesday
+  const parsed = card.parseRRule('FREQ=WEEKLY;INTERVAL=1', wednesday);
+  assert.deepEqual(parsed.byDay, ['WE']);
+});
+
+test('parseRRule keeps explicit BYDAY when present, ignoring fallback start date', () => {
+  const card = makeCard({ entities: ['calendar.a'] });
+  const wednesday = new Date(2026, 6, 15);
+  const parsed = card.parseRRule('FREQ=WEEKLY;INTERVAL=1;BYDAY=MO,FR', wednesday);
+  assert.deepEqual(parsed.byDay, ['MO', 'FR']);
+});
+
+test('parseRRule does not infer byDay for non-WEEKLY frequencies', () => {
+  const card = makeCard({ entities: ['calendar.a'] });
+  const wednesday = new Date(2026, 6, 15);
+  const parsed = card.parseRRule('FREQ=DAILY;INTERVAL=1', wednesday);
+  assert.deepEqual(parsed.byDay, []);
+});
+
+test('parseRRule infers weekday using the configured time_zone, not the browser local zone', () => {
+  const originalTZ = process.env.TZ;
+  try {
+    // Simulate a browser whose local zone is Chicago.
+    process.env.TZ = 'America/Chicago';
+
+    // 2026-07-14T23:00:00Z is still Tuesday 18:00 in Chicago (UTC-5),
+    // but already Wednesday 11:00 in Auckland (UTC+12) — the two zones
+    // disagree on the calendar day, which is exactly what this guards.
+    const instant = new Date('2026-07-14T23:00:00Z');
+    assert.equal(instant.getDay(), 2, 'test setup: browser-local (Chicago) day must be Tuesday');
+
+    const card = makeCard({ entities: ['calendar.a'], time_zone: 'Pacific/Auckland' });
+    const parsed = card.parseRRule('FREQ=WEEKLY;INTERVAL=1', instant);
+
+    assert.deepEqual(parsed.byDay, ['WE'], 'should use the configured Auckland weekday, not the browser-local Tuesday');
+  } finally {
+    if (originalTZ === undefined) {
+      delete process.env.TZ;
+    } else {
+      process.env.TZ = originalTZ;
+    }
+  }
+});
+
+test('parseRRule falls back to the browser local weekday when no time_zone is configured', () => {
+  const originalTZ = process.env.TZ;
+  try {
+    process.env.TZ = 'America/Chicago';
+    const instant = new Date('2026-07-14T23:00:00Z');
+    const card = makeCard({ entities: ['calendar.a'] });
+    const parsed = card.parseRRule('FREQ=WEEKLY;INTERVAL=1', instant);
+    assert.deepEqual(parsed.byDay, ['TU']);
+  } finally {
+    if (originalTZ === undefined) {
+      delete process.env.TZ;
+    } else {
+      process.env.TZ = originalTZ;
+    }
+  }
+});
+
+test('showEditEventModal checks the correct weekday when the event rrule omits BYDAY', () => {
+  const card = makeCard({ entities: ['calendar.family'], enable_event_management: true });
+  card.getWritableCalendars = () => ['calendar.family'];
+  card.getCalendarName = () => 'Family';
+  card.applyEventModalSizeClass = () => {};
+  card.syncRecurrenceEndInputs = () => {};
+  card.setupStartEndDurationSync = () => {};
+  const modal = { classList: createClassListHarness() };
+  const content = { innerHTML: '' };
+  const elements = {
+    'event-modal': modal,
+    'modal-content': content,
+    'edit-event-form': { addEventListener: () => {} },
+    'event-all-day': { checked: false, addEventListener: () => {} },
+    'event-recurring': { checked: true, addEventListener: () => {} },
+    'event-recurrence-frequency': { value: 'WEEKLY', addEventListener: () => {} },
+    'timed-event-fields': { style: {} },
+    'all-day-event-fields': { style: {} },
+    'recurring-event-fields': { style: {} },
+    'event-recurrence-weekdays-group': { style: {} },
+    'form-error': { textContent: '', style: {} },
+    'close-modal': { addEventListener: () => {} },
+    'cancel-btn': { addEventListener: () => {} }
+  };
+  card.getRootElementById = (id) => elements[id] || null;
+  card._root = {
+    querySelectorAll: () => [],
+    querySelector: () => null
+  };
+
+  const startDate = new Date('2026-07-15T09:00:00Z'); // a Wednesday
+  card.showEditEventModal(
+    { entityId: 'calendar.family', uid: 'evt-1', summary: 'Practice', rrule: 'FREQ=WEEKLY;INTERVAL=1', start: { dateTime: '2026-07-15T09:00:00Z' }, end: { dateTime: '2026-07-15T10:00:00Z' } },
+    startDate,
+    new Date('2026-07-15T10:00:00Z'),
+    false,
+    'all'
+  );
+
+  const weCheckboxMatch = content.innerHTML.match(/<input type="checkbox" class="form-checkbox event-recurrence-weekday" value="WE"[^>]*>/);
+  assert.ok(weCheckboxMatch, 'expected a WE weekday checkbox to be rendered');
+  assert.match(weCheckboxMatch[0], /checked/);
+
+  const moCheckboxMatch = content.innerHTML.match(/<input type="checkbox" class="form-checkbox event-recurrence-weekday" value="MO"[^>]*>/);
+  assert.ok(moCheckboxMatch, 'expected a MO weekday checkbox to be rendered');
+  assert.doesNotMatch(moCheckboxMatch[0], /checked/);
 });
