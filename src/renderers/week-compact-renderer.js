@@ -4,10 +4,12 @@ export function renderWeekCompactView({
   today,
   dayNames,
   headerHeight,
+  compactMaxHeight,
   helpers
 }) {
   const headerHeightStyle = headerHeight ? `--week-compact-header-height: ${headerHeight}px;` : '';
-  const containerStyle = `${headerHeightStyle}${helpers.getCompactContainerStyle()}`;
+  const weekdayColorStyle = config.week_compact_weekday_color ? `--week-compact-weekday-color: ${config.week_compact_weekday_color};` : '';
+  const containerStyle = `${headerHeightStyle}--week-compact-weekday-font-size: ${config.week_compact_weekday_font_size}px;--week-compact-day-header-spacing: ${config.week_compact_day_header_spacing}px;${weekdayColorStyle}${helpers.getCompactContainerStyle(compactMaxHeight)}`;
   const spanLayout = helpers.getAllDaySpanLayoutForDays(weekDays);
   const spannedEventKeys = new Set((spanLayout?.spans || []).map((span) => helpers.getEventKey(span.event)));
   const laneOwnerEvents = [];
@@ -17,7 +19,7 @@ export function renderWeekCompactView({
 
   return `
       ${!config.compact_header && !config.hide_calendars ? helpers.renderCalendarBadges() : ''}
-      <div class="week-compact-container day-badge-layout-${config.day_badge_layout_week}" style="${containerStyle}">
+      <div class="week-compact-container${config.compact_height ? ' compact-height' : ''} day-badge-layout-${config.day_badge_layout_week}" style="${containerStyle}">
         ${weekDays.map(date => {
           const isToday = date.toDateString() === today.toDateString();
           const dayEventsForMatching = helpers.getEventsForDay(date, { includeHiddenStyledEvents: true });
