@@ -1,10 +1,10 @@
 name: HACS Action
 
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
   schedule:
-    - cron: "0 0 * * *"
+    # Disabled: February 31st never exists, so this never fires.
+    - cron: "0 0 31 2 *"
 
 jobs:
   hacs:
