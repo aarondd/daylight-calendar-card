@@ -1,10 +1,8 @@
 name: HACS Action
 
+# Runs only when triggered manually from the Actions tab.
 on:
   workflow_dispatch:
-  schedule:
-    # Disabled: February 31st never exists, so this never fires.
-    - cron: "0 0 31 2 *"
 
 jobs:
   hacs:
